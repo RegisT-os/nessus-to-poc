@@ -53,6 +53,14 @@ class EngagementWorkspace:
         return self.root / "scope.yaml"
 
     @property
+    def environments_file(self) -> Path:
+        return self.root / "environments.yaml"
+
+    @property
+    def reporting_file(self) -> Path:
+        return self.root / "reporting.yaml"
+
+    @property
     def imports_originals(self) -> Path:
         return self.root / "imports" / "originals"
 
@@ -276,6 +284,10 @@ class EngagementWorkspace:
     def rewrite_findings(self, rows: list[dict[str, Any]]) -> None:
         """Overwrite findings.jsonl (used to persist updated dispositions/verdicts)."""
         write_jsonl(self.findings_file, rows)
+
+    def rewrite_assets(self, rows: list[dict[str, Any]]) -> None:
+        """Overwrite assets.jsonl (used to persist environment assignments)."""
+        write_jsonl(self.assets_file, rows)
 
     def save_classifications(self, rows: list[dict[str, Any]]) -> None:
         write_jsonl(self.classifications_file, rows)

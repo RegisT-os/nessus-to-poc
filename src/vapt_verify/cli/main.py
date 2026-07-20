@@ -562,6 +562,139 @@ def cmd_evidence_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_profile_show(args: argparse.Namespace) -> int:
+    from vapt_verify.profiles.loader import load_profile
+
+    try:
+        profile = load_profile(args.path)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}")
+        return 2
+    eng = profile.engagement
+    print(f"profile:        {profile.path}")
+    print(f"engagement_id:  {eng.engagement_id}")
+    print(f"client_alias:   {eng.client_alias}")
+    print(f"type:           {eng.engagement_type}")
+    print(f"approved_cidrs: {', '.join(eng.approved_cidrs) or '(none)'}")
+    print(f"environments:   {len(profile.environment_rules)}")
+    for rule in profile.environment_rules:
+        crit = " [CRITICAL]" if rule.critical else ""
+        print(f"  - {rule.name}{crit}: cidrs={rule.cidrs} hostnames={rule.hostname_patterns}")
+    return 0
+
+
+def cmd_profile_apply(args: argparse.Namespace) -> int:
+    import shutil as _shutil
+
+    from vapt_verify.profiles.loader import load_profile
+
+    try:
+        profile = load_profile(args.path)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}")
+        return 2
+    engagement = profile.engagement
+    if args.id:
+        engagement.engagement_id = args.id
+    root = _workspace_root(args.base, engagement.engagement_id)
+    if (root / "engagement.yaml").exists() and not args.force:
+        print(f"error: engagement already exists at {root} (use --force)")
+        return 2
+    ws = EngagementWorkspace.create(root, engagement)
+    for name in ("environments.yaml", "reporting.yaml", "scope.yaml"):
+        src = profile.path / name
+        if src.exists():
+            _shutil.copy2(src, ws.root / name)
+    print(f"Applied profile '{profile.path}' -> engagement '{engagement.engagement_id}'")
+    print(f"  workspace: {ws.root}/")
+    print("Environment rules and reporting preferences copied into the workspace.")
+    return 0
+
+
+def cmd_environments_assign(args: argparse.Namespace) -> int:
+    import yaml as _yaml
+
+    from vapt_verify.profiles.environments import EnvironmentMapper, EnvironmentRule
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    if not ws.environments_file.exists():
+        print("error: no environments.yaml in the workspace (apply a profile first)")
+        return 2
+    env_data = _yaml.safe_load(ws.environments_file.read_text(encoding="utf-8")) or {}
+    rules = [
+        EnvironmentRule(
+            name=item["name"], cidrs=list(item.get("cidrs", [])),
+            hostname_patterns=list(item.get("hostname_patterns", [])),
+            critical=bool(item.get("critical", False)),
+        )
+        for item in env_data.get("environments", [])
+    ]
+    mapper = EnvironmentMapper(rules)
+
+    assets = ws.load_assets()
+    assigned = 0
+    candidates: list[str] = []
+    for asset in assets:
+        result = mapper.assign(
+            ips=asset.get("ip_addresses", []),
+            hostnames=asset.get("hostnames", []) + asset.get("fqdns", []),
+            asset_env=asset.get("environment", "unknown"),
+        )
+        if result.environment != "unknown":
+            asset["environment"] = result.environment
+            assigned += 1
+        if result.candidate:
+            note = "; ".join(result.notes)
+            candidates.append(f"{asset['asset_id']} -> candidate '{result.candidate}' ({note})")
+    ws.rewrite_assets(assets)
+    ws.append_audit_event({"event": "environments_assign", "assigned": assigned})
+    print(f"Assigned environments to {assigned}/{len(assets)} asset(s).")
+    for line in candidates:
+        print(f"  NEEDS CONFIRMATION: {line}")
+    return 0
+
+
+def cmd_retest(args: argparse.Namespace) -> int:
+    from vapt_verify.retest import compare
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    findings = ws.load_findings()
+    by_import: dict[str, list[dict[str, Any]]] = {}
+    for f in findings:
+        imp = f.get("provenance", {}).get("import_id", "")
+        by_import.setdefault(imp, []).append(f)
+    imports = list(by_import.keys())
+    if len(imports) < 2:
+        print("Need at least two imports to retest.")
+        return 2
+    baseline_id = args.baseline or imports[0]
+    latest_id = args.latest or imports[-1]
+    result = compare(
+        baseline=by_import.get(baseline_id, []),
+        latest=by_import.get(latest_id, []),
+        baseline_import=baseline_id, latest_import=latest_id,
+    )
+    out = result.to_dict()
+    print(f"Retest: baseline={baseline_id[:8]} latest={latest_id[:8]}")
+    print(f"  still reported:     {out['counts']['still_reported']}")
+    print(f"  no longer reported: {out['counts']['no_longer_reported']}")
+    print(f"  newly reported:     {out['counts']['newly_reported']}")
+    if result.no_longer_reported:
+        print("  NOTE: 'no longer reported' findings are retained for review "
+              "(candidate service-not-observed / possibly remediated), never deleted.")
+    report_path = ws.root / "reports" / "retest.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    import json as _json
+
+    report_path.write_text(_json.dumps(out, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"  written: {report_path}")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -808,6 +941,32 @@ def build_parser() -> argparse.ArgumentParser:
     add_engagement(p_legacy_nmap)
     p_legacy_nmap.add_argument("--output", default="")
     p_legacy_nmap.set_defaults(func=cmd_legacy_export_nmap)
+
+    p_profile = sub.add_parser("profile", help="engagement profiles")
+    profile_sub = p_profile.add_subparsers(dest="profile_command", required=True)
+    p_profile_show = profile_sub.add_parser("show", help="show a profile")
+    p_profile_show.add_argument("path")
+    p_profile_show.set_defaults(func=cmd_profile_show)
+    p_profile_apply = profile_sub.add_parser("apply", help="create an engagement from a profile")
+    add_base(p_profile_apply)
+    p_profile_apply.add_argument("path")
+    p_profile_apply.add_argument("--id", default="")
+    p_profile_apply.add_argument("--force", action="store_true")
+    p_profile_apply.set_defaults(func=cmd_profile_apply)
+
+    p_env = sub.add_parser("environments", help="environment mapping")
+    env_sub = p_env.add_subparsers(dest="environments_command", required=True)
+    p_env_assign = env_sub.add_parser("assign", help="assign environments to assets")
+    add_base(p_env_assign)
+    add_engagement(p_env_assign)
+    p_env_assign.set_defaults(func=cmd_environments_assign)
+
+    p_retest = sub.add_parser("retest", help="compare two imports (retest)")
+    add_base(p_retest)
+    add_engagement(p_retest)
+    p_retest.add_argument("--baseline", default="")
+    p_retest.add_argument("--latest", default="")
+    p_retest.set_defaults(func=cmd_retest)
 
     p_sec = sub.add_parser("security", help="repository safety checks")
     sec_sub = p_sec.add_subparsers(dest="security_command", required=True)

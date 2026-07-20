@@ -1,0 +1,24 @@
+# Environment mapping rules (sanitized example — RFC 5737 ranges only).
+#
+# Precedence when assigning an environment to an asset:
+#   1. explicit engagement config  2. explicit asset mapping
+#   3. hostname rule               4. IP-range rule            5. unknown
+#
+# A rule marked `critical: true` is NEVER assigned from a hostname hint alone —
+# it must be confirmed by an IP range or an explicit mapping.
+environments:
+  - name: production
+    critical: true
+    cidrs: ["192.0.2.0/25"]
+    hostname_patterns: ["prd", "prod", "-p."]
+  - name: disaster_recovery
+    critical: true
+    cidrs: ["192.0.2.128/25"]
+    hostname_patterns: ["dr-", "-dr."]
+  - name: headquarters
+    cidrs: ["198.51.100.0/24"]
+    hostname_patterns: ["hq-"]
+  - name: uat
+    critical: false
+    cidrs: ["203.0.113.0/24"]
+    hostname_patterns: ["uat", "test", "-t."]
