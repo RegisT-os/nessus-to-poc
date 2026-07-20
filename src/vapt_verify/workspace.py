@@ -23,6 +23,7 @@ from vapt_verify import __version__
 from vapt_verify.importers.base import ImportResult
 from vapt_verify.models.engagement import Engagement
 from vapt_verify.reconciliation.gate import ReconciliationReport
+from vapt_verify.schema import SCHEMA_VERSION
 from vapt_verify.utilities.jsonl import append_jsonl, read_jsonl, write_jsonl
 
 
@@ -118,6 +119,10 @@ class EngagementWorkspace:
         ws.ensure_layout()
         engagement.evidence_root = str(ws.root)
         engagement.save(ws.engagement_file)
+        (ws.root / "schema.json").write_text(
+            json.dumps({"schema_version": SCHEMA_VERSION, "tool_version": __version__}, indent=2),
+            encoding="utf-8",
+        )
         if not ws.scope_file.exists():
             ws.scope_file.write_text(
                 "# Scope enforcement is implemented in v0.3. Until then this file\n"
@@ -136,6 +141,13 @@ class EngagementWorkspace:
 
     def engagement(self) -> Engagement:
         return Engagement.load(self.engagement_file)
+
+    def schema_version(self) -> str:
+        schema_file = self.root / "schema.json"
+        if not schema_file.exists():
+            return "unknown"
+        data = json.loads(schema_file.read_text(encoding="utf-8"))
+        return str(data.get("schema_version", "unknown"))
 
     # -- import persistence -------------------------------------------------
 
@@ -163,6 +175,7 @@ class EngagementWorkspace:
         # 3. Write the import manifest.
         manifest = {
             "import_id": result.import_id,
+            "schema_version": SCHEMA_VERSION,
             "source_scanner": result.source_scanner,
             "source_file": result.source_file,
             "preserved_original": str(original_dest.relative_to(self.root)),

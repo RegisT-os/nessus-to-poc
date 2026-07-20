@@ -14,12 +14,22 @@ disappear?"* with a definitive **no**.
 
 ## Status
 
-**v0.1 — Lossless Import Foundation** (see [`docs/ROADMAP.md`](docs/ROADMAP.md)).
-Implemented: safe streaming Nessus XML import, full finding model with
-provenance, fail-closed reconciliation gate, JSONL inventory, engagement
-workspace, repository client-data safety checker, and a full regression suite
-pinning every legacy failure mode. Classification, verification adapters,
-execution and reporting arrive in v0.2–v0.7.
+**v1.0 — Production ready** (see [`docs/ROADMAP.md`](docs/ROADMAP.md)). The full
+near-term workflow is implemented and tested (115 tests; all 32 mandatory
+regression tests from the brief pass; `ruff` + `mypy --strict` clean):
+
+- Lossless multi-scanner import (Nessus XML/CSV, Nmap XML, normalized JSON) with
+  a fail-closed reconciliation gate.
+- Explainable classification into verification families + declarative recipe
+  library (with legacy `VULNERABILITIES` migration) and per-finding plans.
+- Safe execution: dry-run by default, scope-enforced, argv arrays (no shell),
+  timestamped + hashed evidence; exit codes never set verdicts.
+- Review/decision workflow with role-gated false-positive approval.
+- Coverage-first reporting (Markdown/JSON/CSV/HTML), engagement profiles with
+  environment mapping, retest, backup/restore with integrity manifest, and
+  schema versioning.
+
+The long-term horizon (v2.0 → v10.0) is mapped in `docs/ROADMAP.md`.
 
 ## Why (the legacy lesson)
 

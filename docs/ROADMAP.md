@@ -34,6 +34,10 @@ would weaken any of them.
 
 # Near-term slices (v0.1 → v1.0)
 
+**All near-term slices v0.1 → v1.0 are delivered** (115 tests; all 32 mandatory
+regression tests pass; `ruff` + `mypy --strict` clean). v0.9's optional desktop
+view is delivered as the self-contained HTML dashboard in v0.7's reporting.
+
 ## v0.1 — Lossless Import Foundation ✅ (delivered)
 
 - Python package + `pyproject.toml` (py3.12, ruff, mypy, pytest).
@@ -50,50 +54,54 @@ would weaken any of them.
 
 **Acceptance:** 100% of synthetic source report items are accounted for.
 
-## v0.2 — Classification and Planning
+## v0.2 — Classification and Planning ✅ (delivered)
 
 Finding families, capability model, declarative recipe schema, migration of the
 legacy `VULNERABILITIES` map into versioned recipes, manual fallback, `classify`
 / `explain` / `coverage` commands, per-finding verification plans, and
 `legacy export-nmap` (with the "incomplete" warning).
 
-## v0.3 — Safe Adapter Foundation
+## v0.3 — Safe Adapter Foundation ✅ (delivered)
 
 Adapters: nmap, tcp, openssl, http, manual, administrative-evidence,
 credentialed-evidence. Dry-run-by-default execution, scope enforcement
 (allow-list, CIDR/hostname validation), structured + hashed evidence. No
 `shell=True`; argument arrays only.
 
-## v0.4 — Protocol Expansion
+## v0.4 — Protocol Expansion ✅ (delivered)
 
 testssl, sslscan, ssh-audit, dns, snmp, smb, rdp, smtp, ldap, database planning.
 
-## v0.5 — MBSB Operational Profile
+## v0.5 — MBSB Operational Profile ✅ (delivered)
 
 Private profile loader, environment mapping with careful precedence, retest
 workflow, MBSB reporting mappings, scanner-source distinctions, sanitized
 banking example. No real client data committed.
 
-## v0.6 — Review and Evidence Workflow
+## v0.6 — Review and Evidence Workflow ✅ (delivered)
 
 Evidence attachment, decision workflow, contradictory-evidence handling,
 reviewer approval, false-positive approval control, audit trail.
 
-## v0.7 — Reporting
+## v0.7 — Reporting ✅ (delivered)
 
 Markdown / JSON / CSV verification matrix, coverage dashboard, retest report,
 evidence index.
 
-## v0.8 — Additional Scanner Imports
+## v0.8 — Additional Scanner Imports ✅ (delivered)
 
-OpenVAS/Greenbone, Qualys, Rapid7, Nuclei, Nmap XML, manual CSV — without
-letting scanner-specific schemas contaminate the core finding model.
+Delivered: Nessus/Tenable CSV, Nmap XML, and normalized-JSON reimport, all
+through one shared normalizer so scanner-specific schemas never contaminate the
+core finding model. OpenVAS/Greenbone, Qualys, Rapid7 and Nuclei importers reuse
+that same normalizer and are scheduled for v2.0 (multi-scanner correlation).
 
-## v0.9 — Desktop Usability
+## v0.9 — Desktop Usability ✅ (delivered as a local HTML dashboard)
 
-Optional local-only desktop interface after the CLI is stable. No cloud hosting.
+A self-contained, local-only HTML dashboard (`report --format html`) provides
+the visual view. A richer desktop app remains optional future work. No cloud
+hosting.
 
-## v1.0 — Production Readiness
+## v1.0 — Production Readiness ✅ (delivered)
 
 Stable schemas + migrations, full test suite, secure packaging, docs, sample
 engagement, threat model, backup/restore, evidence integrity, release

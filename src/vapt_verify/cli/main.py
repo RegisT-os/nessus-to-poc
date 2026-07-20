@@ -1,13 +1,13 @@
 """``vapt-verify`` command-line entry point.
 
-The v0.1 CLI covers the lossless-import foundation: engagement creation, import
-with a fail-closed reconciliation gate, inventory browsing and repository safety
-scanning. Classification, planning, execution and reporting commands arrive in
-later slices; they are declared in docs/ROADMAP.md.
+The CLI spans the full workflow: engagement/profile setup, lossless import with
+a fail-closed reconciliation gate, explainable classification and planning,
+dry-run-by-default safe execution, review/decision recording, coverage and
+reporting, backup/restore and repository safety scanning.
 
-Design note: ``run`` (adapter execution) is dry-run by default and is not yet
-implemented in v0.1 — no verification action can be executed until the safe
-adapter foundation (v0.3) lands.
+Design note: ``run`` (adapter execution) is dry-run by default; nothing is
+executed against a target unless it is explicitly in the engagement scope and
+``--approve`` is passed.
 """
 
 from __future__ import annotations
@@ -797,6 +797,48 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_schema(args: argparse.Namespace) -> int:
+    from vapt_verify.schema import SCHEMA_VERSION, is_current
+
+    print(f"current schema version: {SCHEMA_VERSION}")
+    if args.engagement:
+        ws, err = _load_ws(args)
+        if ws is None:
+            return err
+        found = ws.schema_version()
+        state = "current" if is_current(found) else "NEEDS MIGRATION"
+        print(f"engagement '{args.engagement}' schema: {found} ({state})")
+        if not is_current(found):
+            return 1
+    return 0
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    from vapt_verify.backup import create_backup
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    dest = create_backup(ws.root, args.output or None)
+    print(f"Backup written: {dest}")
+    print("A backup_manifest.json with per-file SHA-256 is embedded for integrity checking.")
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    from vapt_verify.backup import restore_backup
+
+    restored, errors = restore_backup(args.archive, args.base)
+    print(f"Restored to: {restored}")
+    if errors:
+        print(f"INTEGRITY ERRORS ({len(errors)}):")
+        for e in errors[:20]:
+            print(f"  - {e}")
+        return 1
+    print("Integrity verified: all files match the backup manifest hashes.")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -1092,6 +1134,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--contradicting", action="append", default=[])
     p_review.add_argument("--confidence", default="medium")
     p_review.set_defaults(func=cmd_review)
+
+    p_schema = sub.add_parser("schema", help="show/verify schema version")
+    add_base(p_schema)
+    p_schema.add_argument("--engagement", default="")
+    p_schema.set_defaults(func=cmd_schema)
+
+    p_backup = sub.add_parser("backup", help="back up an engagement (with integrity manifest)")
+    add_base(p_backup)
+    add_engagement(p_backup)
+    p_backup.add_argument("--output", default="")
+    p_backup.set_defaults(func=cmd_backup)
+
+    p_restore = sub.add_parser("restore", help="restore an engagement backup")
+    add_base(p_restore)
+    p_restore.add_argument("archive")
+    p_restore.set_defaults(func=cmd_restore)
 
     p_sec = sub.add_parser("security", help="repository safety checks")
     sec_sub = p_sec.add_subparsers(dest="security_command", required=True)
