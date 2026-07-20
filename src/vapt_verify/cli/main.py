@@ -750,6 +750,33 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    from vapt_verify.reporting.generator import ReportGenerator
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    gen = ReportGenerator(ws)
+    out_dir = ws.root / "reports"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fmts = ["markdown", "json", "csv", "html"] if args.format == "all" else [args.format]
+    written: list[str] = []
+    renderers = {
+        "markdown": ("report.md", gen.markdown),
+        "json": ("report.json", gen.json_report),
+        "csv": ("verification_matrix.csv", gen.csv_matrix),
+        "html": ("dashboard.html", gen.html_dashboard),
+    }
+    for fmt in fmts:
+        filename, render = renderers[fmt]
+        out_path = out_dir / filename
+        out_path.write_text(render(), encoding="utf-8")
+        written.append(str(out_path))
+    for line in written:
+        print(f"wrote {line}")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -1022,6 +1049,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_retest.add_argument("--baseline", default="")
     p_retest.add_argument("--latest", default="")
     p_retest.set_defaults(func=cmd_retest)
+
+    p_report = sub.add_parser("report", help="generate reports")
+    add_base(p_report)
+    add_engagement(p_report)
+    p_report.add_argument("--format", choices=["markdown", "json", "csv", "html", "all"],
+                          default="all")
+    p_report.set_defaults(func=cmd_report)
 
     p_review = sub.add_parser("review", help="review a finding and record a decision")
     add_base(p_review)
