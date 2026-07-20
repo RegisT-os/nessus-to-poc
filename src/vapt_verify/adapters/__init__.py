@@ -12,6 +12,7 @@ from vapt_verify.adapters.base import (
     RealCommandRunner,
     RealConnector,
 )
+from vapt_verify.adapters.database import DatabaseAdapter
 from vapt_verify.adapters.dns import DnsAdapter
 from vapt_verify.adapters.evidence_request import (
     AdministrativeAdapter,
@@ -43,6 +44,7 @@ _ADAPTERS: dict[str, Adapter] = {
         SnmpAdapter(),
         SmbAdapter(),
         LdapAdapter(),
+        DatabaseAdapter(),
         ManualAdapter(),
         AdministrativeAdapter(),
         CredentialedAdapter(),
