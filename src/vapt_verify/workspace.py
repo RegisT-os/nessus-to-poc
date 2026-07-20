@@ -23,7 +23,7 @@ from vapt_verify import __version__
 from vapt_verify.importers.base import ImportResult
 from vapt_verify.models.engagement import Engagement
 from vapt_verify.reconciliation.gate import ReconciliationReport
-from vapt_verify.utilities.jsonl import append_jsonl, read_jsonl
+from vapt_verify.utilities.jsonl import append_jsonl, read_jsonl, write_jsonl
 
 
 @dataclass
@@ -254,3 +254,57 @@ class EngagementWorkspace:
             for path in sorted(self.reconciliation_dir.glob("*.json")):
                 reports.append(json.loads(path.read_text(encoding="utf-8")))
         return reports
+
+    # -- classification / planning / decisions ------------------------------
+
+    @property
+    def classifications_file(self) -> Path:
+        return self.normalized_dir / "classifications.jsonl"
+
+    @property
+    def plans_dir(self) -> Path:
+        return self.root / "plans"
+
+    @property
+    def decisions_file(self) -> Path:
+        return self.normalized_dir / "decisions.jsonl"
+
+    @property
+    def evidence_dir(self) -> Path:
+        return self.root / "evidence"
+
+    def rewrite_findings(self, rows: list[dict[str, Any]]) -> None:
+        """Overwrite findings.jsonl (used to persist updated dispositions/verdicts)."""
+        write_jsonl(self.findings_file, rows)
+
+    def save_classifications(self, rows: list[dict[str, Any]]) -> None:
+        write_jsonl(self.classifications_file, rows)
+
+    def load_classifications(self) -> list[dict[str, Any]]:
+        return list(read_jsonl(self.classifications_file))
+
+    def save_plan(self, finding_id: str, plan: dict[str, Any]) -> Path:
+        self.plans_dir.mkdir(parents=True, exist_ok=True)
+        path = self.plans_dir / f"{finding_id}.json"
+        path.write_text(json.dumps(plan, indent=2, sort_keys=True), encoding="utf-8")
+        return path
+
+    def load_plans(self) -> list[dict[str, Any]]:
+        plans: list[dict[str, Any]] = []
+        if self.plans_dir.exists():
+            for path in sorted(self.plans_dir.glob("*.json")):
+                plans.append(json.loads(path.read_text(encoding="utf-8")))
+        return plans
+
+    def append_decision(self, decision: dict[str, Any]) -> None:
+        append_jsonl(self.decisions_file, [decision])
+
+    def load_decisions(self) -> list[dict[str, Any]]:
+        return list(read_jsonl(self.decisions_file))
+
+    def append_audit_event(self, event: dict[str, Any]) -> None:
+        """Append an arbitrary immutable audit event."""
+        self.audit_log.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"timestamp": _dt.datetime.now(_dt.UTC).isoformat(), **event}
+        with open(self.audit_log, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")

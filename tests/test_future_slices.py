@@ -13,34 +13,15 @@ from __future__ import annotations
 
 import pytest
 
-_V02 = "implemented in v0.2 (classification & planning)"
 _V03 = "implemented in v0.3 (safe adapter foundation & execution)"
-_V04 = "implemented in v0.4 (protocol expansion)"
 _V06 = "implemented in v0.6 (review & evidence workflow)"
 
-
-@pytest.mark.skip(reason=_V02)
-def test_local_check_findings_not_assigned_remote_nmap_only() -> None:  # task 22.13
-    ...
+# Tasks 22.13, 22.14, 22.16, 22.17 and 22.24 are implemented in v0.2:
+#   see tests/test_classification.py and tests/test_planning.py.
 
 
-@pytest.mark.skip(reason=_V04)
-def test_tls_finding_requiring_sni_generates_sni_aware_plan() -> None:  # task 22.14
-    ...
-
-
-@pytest.mark.skip(reason=_V04)
+@pytest.mark.skip(reason=_V06)
 def test_tls_not_reproduced_by_nmap_can_be_confirmed_by_openssl() -> None:  # task 22.15
-    ...
-
-
-@pytest.mark.skip(reason=_V04)
-def test_ssh_enum_alone_does_not_confirm_complex_ssh_vuln() -> None:  # task 22.16
-    ...
-
-
-@pytest.mark.skip(reason=_V02)
-def test_vmware_advisory_requests_build_or_patch_evidence() -> None:  # task 22.17
     ...
 
 
@@ -61,11 +42,6 @@ def test_missing_binary_is_capability_gap_not_finding_removal() -> None:  # task
 
 @pytest.mark.skip(reason=_V03)
 def test_out_of_scope_target_blocked_but_retained() -> None:  # task 22.21
-    ...
-
-
-@pytest.mark.skip(reason=_V02)
-def test_legacy_export_warns_it_is_incomplete() -> None:  # task 22.24
     ...
 
 

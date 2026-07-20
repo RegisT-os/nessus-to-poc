@@ -19,8 +19,15 @@ from pathlib import Path
 from typing import Any
 
 from vapt_verify import __version__
+from vapt_verify.classification.classifier import Classifier
+from vapt_verify.classification.models import Capabilities
+from vapt_verify.coverage import compute_coverage
 from vapt_verify.importers.nessus_xml import NessusImporter
 from vapt_verify.models.engagement import Engagement, TestingWindow
+from vapt_verify.models.finding import Finding
+from vapt_verify.planning.planner import Planner
+from vapt_verify.recipes.legacy_migration import nmap_scripts_for_name
+from vapt_verify.recipes.library import RecipeLibrary
 from vapt_verify.reconciliation.gate import ReconciliationStatus, reconcile
 from vapt_verify.security.client_data_check import scan_repository
 from vapt_verify.workspace import EngagementWorkspace
@@ -240,6 +247,166 @@ def cmd_findings_show(args: argparse.Namespace) -> int:
     return 2
 
 
+def cmd_capabilities(_args: argparse.Namespace) -> int:
+    caps = Capabilities.detect()
+    from vapt_verify.classification.models import KNOWN_TOOLS
+
+    print("verification tool capabilities (absence never drops a finding):")
+    for tool in KNOWN_TOOLS:
+        mark = "available" if tool in caps.available else "missing"
+        print(f"  {tool:<14} {mark}")
+    return 0
+
+
+def cmd_classify(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    library = RecipeLibrary.load_builtin()
+    caps = Capabilities.detect()
+    classifier = Classifier(library, caps)
+
+    rows = ws.load_findings()
+    classifications: list[dict[str, object]] = []
+    disposition_counts: dict[str, int] = {}
+    for row in rows:
+        finding = Finding.from_dict(row)
+        result = classifier.classify(finding)
+        row["disposition"] = result.disposition
+        row["verification_requirements"] = result.verification_requirements
+        classifications.append(result.to_dict())
+        disposition_counts[result.disposition] = disposition_counts.get(result.disposition, 0) + 1
+
+    ws.rewrite_findings(rows)
+    ws.save_classifications(classifications)
+    ws.append_audit_event({"event": "classify", "classified": len(rows)})
+
+    print(f"Classified {len(rows)} finding(s). Dispositions:")
+    for disposition, count in sorted(disposition_counts.items()):
+        print(f"  {count:>4}  {disposition}")
+    print("Every finding has an explicit disposition (no finding left unclassified).")
+    return 0
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    for c in ws.load_classifications():
+        if c["finding_id"] == args.finding_id:
+            _print_classification(c)
+            return 0
+    print(f"error: no classification for {args.finding_id} (run 'vapt-verify classify' first)")
+    return 2
+
+
+def cmd_coverage(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    report = compute_coverage(ws.load_findings())
+    print(f"Coverage: {report.accounted}/{report.total_imported} findings accounted for.")
+    print(f"  classified:  {report.classified}")
+    print(f"  unreviewed:  {report.unreviewed}")
+    print("  by disposition:")
+    for disposition, count in sorted(report.by_disposition.items()):
+        print(f"    {count:>4}  {disposition}")
+    print("  by verdict:")
+    for verdict, count in sorted(report.by_verdict.items()):
+        print(f"    {count:>4}  {verdict}")
+    if not report.totals_balance:
+        print("ERROR: coverage does not total back to imported findings.")
+        return 1
+    print("PRIMARY METRIC: accounted / imported = 100%.")
+    return 0
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    library = RecipeLibrary.load_builtin()
+    caps = Capabilities.detect()
+    classifier = Classifier(library, caps)
+    planner = Planner()
+    assets = {a["asset_id"]: a for a in ws.load_assets()}
+
+    rows = ws.load_findings()
+    if args.finding:
+        rows = [r for r in rows if r["finding_id"] == args.finding]
+    if args.asset:
+        rows = [r for r in rows if r["asset_id"] == args.asset]
+    if not rows:
+        print("No matching findings.")
+        return 2
+
+    written = 0
+    for row in rows:
+        finding = Finding.from_dict(row)
+        classification = classifier.classify(finding)
+        recipe = library.by_id(classification.selected_recipe_id)
+        if recipe is None:
+            continue
+        asset = assets.get(finding.asset_id, {})
+        hostnames = asset.get("fqdns", []) + asset.get("hostnames", [])
+        plan = planner.plan(
+            finding=finding,
+            classification=classification,
+            recipe=recipe,
+            environment=asset.get("environment", "unknown"),
+            asset_hostname=hostnames[0] if hostnames else "",
+        )
+        ws.save_plan(finding.finding_id, plan.to_dict())
+        written += 1
+        if args.finding:
+            _print_plan(plan.to_dict())
+    print(f"Wrote {written} verification plan(s) to {ws.plans_dir}/")
+    return 0
+
+
+def cmd_legacy_export_nmap(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = ws.load_findings()
+    lines: list[str] = []
+    covered = 0
+    for row in rows:
+        finding = Finding.from_dict(row)
+        scripts = nmap_scripts_for_name(finding.plugin_name)
+        if not scripts or finding.port <= 0:
+            continue
+        covered += 1
+        # Rendered for display only; real execution (v0.3) uses argument arrays.
+        target = finding.asset_id
+        ip = _finding_ip(row)
+        if ip:
+            target = ip
+        proto_flag = "-sU" if finding.transport.value == "udp" else "-sT"
+        script_arg = ",".join(scripts)
+        lines.append(
+            f"nmap {proto_flag} -Pn -p {finding.port} --script {script_arg} {target}"
+            f"   # {finding.plugin_name}"
+        )
+
+    banner = (
+        "============================================================\n"
+        "WARNING: This export includes only findings with applicable\n"
+        "Nmap recipes. It is NOT a complete verification of the scan.\n"
+        f"{covered} of {len(rows)} findings have a legacy Nmap recipe.\n"
+        "Use `vapt-verify coverage` to review ALL remaining findings.\n"
+        "Nmap output NEVER by itself confirms or refutes a finding.\n"
+        "============================================================"
+    )
+    print(banner)
+    for line in lines:
+        print(line)
+    if args.output:
+        Path(args.output).write_text(banner + "\n" + "\n".join(lines) + "\n", encoding="utf-8")
+        print(f"\nWritten to {args.output}")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -261,6 +428,68 @@ def _load_ws(args: argparse.Namespace) -> tuple[EngagementWorkspace | None, int]
     except FileNotFoundError as exc:
         print(f"error: {exc}")
         return None, 2
+
+
+def _finding_ip(row: dict[str, Any]) -> str:
+    props = row.get("host_properties", {})
+    ip = props.get("host-ip") if isinstance(props, dict) else ""
+    if isinstance(ip, list):
+        return str(ip[0]) if ip else ""
+    return str(ip or "")
+
+
+def _print_classification(c: dict[str, Any]) -> None:
+    print(f"finding_id:   {c['finding_id']}")
+    print(f"family:       {c['family']}")
+    print(f"recipe:       {c['selected_recipe_id']} (layer {c['selection_layer']})")
+    print(f"              {c['selected_recipe_title']}")
+    print(f"rationale:    {c['selection_rationale']}")
+    print(f"disposition:  {c['disposition']}")
+    print(f"nmap role:    {c['nmap_role']}   auth: {c['auth_requirement']}")
+    print(f"safety:       {c['safety_class']}")
+    if c.get("missing_capabilities"):
+        tools = ", ".join(c["missing_capabilities"])
+        print(f"missing tools: {tools} (does not remove the finding)")
+    if c.get("missing_information"):
+        print("missing information:")
+        for m in c["missing_information"]:
+            print(f"    - {m}")
+    if c.get("verification_requirements"):
+        print("requirements:")
+        for r in c["verification_requirements"]:
+            print(f"    - {r}")
+    if c.get("expected_confirming_evidence"):
+        print("expected confirming evidence:")
+        for e in c["expected_confirming_evidence"]:
+            print(f"    - {e}")
+    if c.get("known_limitations"):
+        print("known limitations:")
+        for lim in c["known_limitations"]:
+            print(f"    - {lim}")
+    if c.get("rejected_recipes"):
+        print("why not other recipes:")
+        for r in c["rejected_recipes"]:
+            print(f"    - {r['recipe_id']}: {r['reason']}")
+
+
+def _print_plan(p: dict[str, Any]) -> None:
+    print(f"finding:      {p['finding_summary']} ({p['finding_id']})")
+    print(f"objective:    {p['verification_objective']}")
+    print(f"primary:      {p['primary_validation_method']}")
+    for s in p.get("supporting_validation_methods", []):
+        print(f"supporting:   {s}")
+    for m in p.get("manual_fallback", []):
+        print(f"manual:       {m}")
+    if p.get("sni_vhost_requirements"):
+        print("SNI/vhost:")
+        for s in p["sni_vhost_requirements"]:
+            print(f"    - {s}")
+    print(f"tools:        {', '.join(p.get('required_tools', [])) or 'none'}")
+    print(f"credentials:  {p['required_credentials']}   network: {p['required_network_position']}")
+    print(f"safety:       {p['safety_classification']}   scope: {p['scope_decision']}")
+    print("reviewer checklist:")
+    for c in p.get("reviewer_checklist", []):
+        print(f"    - {c}")
 
 
 def _print_finding(f: dict[str, Any]) -> None:
@@ -362,6 +591,41 @@ def build_parser() -> argparse.ArgumentParser:
     add_engagement(p_find_show)
     p_find_show.add_argument("finding_id")
     p_find_show.set_defaults(func=cmd_findings_show)
+
+    sub.add_parser("capabilities", help="list available verification tools").set_defaults(
+        func=cmd_capabilities
+    )
+
+    p_classify = sub.add_parser("classify", help="classify findings and assign dispositions")
+    add_base(p_classify)
+    add_engagement(p_classify)
+    p_classify.set_defaults(func=cmd_classify)
+
+    p_explain = sub.add_parser("explain", help="explain a finding's classification")
+    add_base(p_explain)
+    add_engagement(p_explain)
+    p_explain.add_argument("finding_id")
+    p_explain.set_defaults(func=cmd_explain)
+
+    p_cov = sub.add_parser("coverage", help="coverage report (accounted / imported)")
+    add_base(p_cov)
+    add_engagement(p_cov)
+    p_cov.set_defaults(func=cmd_coverage)
+
+    p_plan = sub.add_parser("plan", help="build verification plans")
+    add_base(p_plan)
+    add_engagement(p_plan)
+    p_plan.add_argument("--finding", default="")
+    p_plan.add_argument("--asset", default="")
+    p_plan.set_defaults(func=cmd_plan)
+
+    p_legacy = sub.add_parser("legacy", help="legacy-compatibility commands")
+    legacy_sub = p_legacy.add_subparsers(dest="legacy_command", required=True)
+    p_legacy_nmap = legacy_sub.add_parser("export-nmap", help="export legacy-style Nmap commands")
+    add_base(p_legacy_nmap)
+    add_engagement(p_legacy_nmap)
+    p_legacy_nmap.add_argument("--output", default="")
+    p_legacy_nmap.set_defaults(func=cmd_legacy_export_nmap)
 
     p_sec = sub.add_parser("security", help="repository safety checks")
     sec_sub = p_sec.add_subparsers(dest="security_command", required=True)
