@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# SANITIZED EXAMPLE PROFILE — safe to commit.
+#
+# This is a generic, fictional banking-enterprise engagement used for
+# documentation and tests. It contains NO real client data and uses only
+# RFC 5737 documentation IP ranges (192.0.2.0/24, 198.51.100.0/24,
+# 203.0.113.0/24). Real engagements live under profiles/private/ and are
+# git-ignored (see docs/ENGAGEMENT_PROFILES.md).
+# ---------------------------------------------------------------------------
+engagement_id: example-banking-enterprise
+client_alias: ExampleBank
+engagement_type: internal
+assessment_type: vulnerability-verification
+authorisation_reference: EXAMPLE-ROE-2026-001
+rules_of_engagement_reference: EXAMPLE-ROE-2026-001
+testing_window:
+  start: "2026-07-20T00:00:00+00:00"
+  end: "2026-07-31T23:59:59+00:00"
+timezone: UTC
+approved_targets: []
+approved_cidrs:
+  - 192.0.2.0/24
+  - 198.51.100.0/24
+approved_hostnames:
+  - web01.example-doc.test
+  - db01.example-doc.test
+excluded_targets:
+  - 192.0.2.254   # example jump host, out of scope
+permitted_protocols:
+  - tcp
+  - udp
+permitted_validation_modes:
+  - passive
+  - active-nonintrusive
+rate_limits:
+  max_hosts_per_minute: 10
+  per_adapter_timeout_seconds: 120
+# References only — NEVER store plaintext credentials here.
+credential_references:
+  - vault://example/nessus-readonly
+environment_mappings:
+  production:
+    cidrs: ["192.0.2.0/25"]
+  disaster_recovery:
+    cidrs: ["192.0.2.128/25"]
+  headquarters:
+    cidrs: ["198.51.100.0/24"]
+evidence_root: ""
+data_classification: restricted
