@@ -102,6 +102,25 @@ def cmd_engagement_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _select_importer(fmt: str, source: Path, engagement_id: str) -> Any:
+    from vapt_verify.importers.nessus_csv import NessusCsvImporter
+    from vapt_verify.importers.nmap_xml import NmapXmlImporter
+    from vapt_verify.importers.normalized_json import NormalizedJsonImporter
+
+    if fmt == "auto":
+        suffix = source.suffix.lower()
+        fmt = {
+            ".nessus": "nessus", ".csv": "nessus-csv", ".xml": "nmap-xml",
+            ".jsonl": "normalized-json", ".json": "normalized-json",
+        }.get(suffix, "nessus")
+    importers = {
+        "nessus": NessusImporter, "nessus-csv": NessusCsvImporter,
+        "nmap-xml": NmapXmlImporter, "normalized-json": NormalizedJsonImporter,
+    }
+    cls = importers.get(fmt, NessusImporter)
+    return cls(engagement_id=engagement_id)
+
+
 def cmd_import_dispatch(args: argparse.Namespace) -> int:
     """Route ``import status`` vs ``import <file>`` from a single positional."""
     if args.target == "status":
@@ -124,7 +143,8 @@ def cmd_import(args: argparse.Namespace) -> int:
         print(f"error: scan file not found: {source}")
         return 2
 
-    importer = NessusImporter(engagement_id=args.engagement)
+    importer = _select_importer(getattr(args, "format", "auto"), source, args.engagement)
+    print(f"  importer:              {importer.source_scanner}")
     result = importer.import_file(source)
     report = reconcile(result, approved_suppressions=args.allow_suppressions)
     record = ws.persist_import(source_path=source, result=result, reconciliation=report)
@@ -931,7 +951,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_import = sub.add_parser("import", help="import a scanner file (or 'import status')")
     add_base(p_import)
     add_engagement(p_import)
-    p_import.add_argument("target", help="path to a .nessus file, or the literal 'status'")
+    p_import.add_argument("target", help="path to a scan file, or the literal 'status'")
+    p_import.add_argument("--format", default="auto",
+                          choices=["auto", "nessus", "nessus-csv", "nmap-xml", "normalized-json"])
     p_import.add_argument("--allow-parse-failures", action="store_true")
     p_import.add_argument("--allow-suppressions", type=int, default=0)
     p_import.set_defaults(func=cmd_import_dispatch)
