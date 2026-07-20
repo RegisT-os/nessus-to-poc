@@ -695,6 +695,61 @@ def cmd_retest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    from vapt_verify.review.engine import ReviewEngine, ReviewError, detect_contradiction
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = ws.load_findings()
+    finding = next((r for r in rows if r["finding_id"] == args.finding), None)
+    if finding is None:
+        print(f"error: finding {args.finding} not found")
+        return 2
+
+    finding_evidence = [e for e in ws.load_evidence() if e.get("finding_id") == args.finding]
+    contradiction, description = detect_contradiction(finding_evidence)
+
+    # Display mode: no verdict supplied.
+    if not args.verdict:
+        print(f"finding:   {finding['finding_id']} ({finding.get('plugin_name')})")
+        print(f"verdict:   {finding.get('verdict')}")
+        print(f"evidence:  {len(finding_evidence)} record(s)")
+        if contradiction:
+            print(f"CONTRADICTION: {description}")
+        decisions = [d for d in ws.load_decisions() if d.get("finding_id") == args.finding]
+        for d in decisions:
+            print(f"  decision: {d['verdict']} by {d['reviewer']} — {d['reviewer_rationale']}")
+        return 0
+
+    engine = ReviewEngine()
+    try:
+        decision = engine.record_decision(
+            finding=finding,
+            verdict=args.verdict,
+            reviewer=args.reviewer,
+            rationale=args.rationale,
+            reviewer_roles=set(args.role),
+            supporting_evidence_ids=args.supporting,
+            contradicting_evidence_ids=args.contradicting,
+            confidence=args.confidence,
+        )
+    except ReviewError as exc:
+        print(f"REVIEW DENIED: {exc}")
+        return 2
+
+    ws.rewrite_findings(rows)
+    ws.append_decision(decision.to_dict())
+    ws.append_audit_event({
+        "event": "review", "finding_id": args.finding, "verdict": decision.verdict,
+        "reviewer": args.reviewer,
+    })
+    print(f"Recorded: {finding['finding_id']} -> {decision.verdict} by {args.reviewer}")
+    if contradiction:
+        print(f"NOTE (surfaced, not resolved): {description}")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -967,6 +1022,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_retest.add_argument("--baseline", default="")
     p_retest.add_argument("--latest", default="")
     p_retest.set_defaults(func=cmd_retest)
+
+    p_review = sub.add_parser("review", help="review a finding and record a decision")
+    add_base(p_review)
+    add_engagement(p_review)
+    p_review.add_argument("finding")
+    p_review.add_argument("--verdict", default="", help="omit to show current state")
+    p_review.add_argument("--reviewer", default="unknown")
+    p_review.add_argument("--rationale", default="")
+    p_review.add_argument("--role", action="append", default=[],
+                          help="reviewer role (repeatable); 'lead'/'approver' may approve FPs")
+    p_review.add_argument("--supporting", action="append", default=[])
+    p_review.add_argument("--contradicting", action="append", default=[])
+    p_review.add_argument("--confidence", default="medium")
+    p_review.set_defaults(func=cmd_review)
 
     p_sec = sub.add_parser("security", help="repository safety checks")
     sec_sub = p_sec.add_subparsers(dest="security_command", required=True)
