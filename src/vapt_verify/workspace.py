@@ -302,6 +302,16 @@ class EngagementWorkspace:
     def load_decisions(self) -> list[dict[str, Any]]:
         return list(read_jsonl(self.decisions_file))
 
+    @property
+    def evidence_index_file(self) -> Path:
+        return self.normalized_dir / "evidence.jsonl"
+
+    def append_evidence(self, evidence: dict[str, Any]) -> None:
+        append_jsonl(self.evidence_index_file, [evidence])
+
+    def load_evidence(self) -> list[dict[str, Any]]:
+        return list(read_jsonl(self.evidence_index_file))
+
     def append_audit_event(self, event: dict[str, Any]) -> None:
         """Append an arbitrary immutable audit event."""
         self.audit_log.parent.mkdir(parents=True, exist_ok=True)

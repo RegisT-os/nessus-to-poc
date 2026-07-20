@@ -19,12 +19,16 @@ from pathlib import Path
 from typing import Any
 
 from vapt_verify import __version__
+from vapt_verify.adapters import get_adapter
+from vapt_verify.adapters.base import AdapterKind, ExecutionContext
 from vapt_verify.classification.classifier import Classifier
 from vapt_verify.classification.models import Capabilities
 from vapt_verify.coverage import compute_coverage
+from vapt_verify.execution.runner import Executor, OutcomeStatus
 from vapt_verify.importers.nessus_xml import NessusImporter
 from vapt_verify.models.engagement import Engagement, TestingWindow
 from vapt_verify.models.finding import Finding
+from vapt_verify.models.recipe import Recipe
 from vapt_verify.planning.planner import Planner
 from vapt_verify.recipes.legacy_migration import nmap_scripts_for_name
 from vapt_verify.recipes.library import RecipeLibrary
@@ -407,6 +411,157 @@ def cmd_legacy_export_nmap(args: argparse.Namespace) -> int:
     return 0
 
 
+def _select_adapter(recipe: Recipe) -> tuple[str, dict[str, Any]]:
+    """Pick the primary executable adapter for a recipe, else a manual one."""
+    for step in list(recipe.automated_steps) + list(recipe.assisted_steps):
+        adapter = get_adapter(step.adapter)
+        if adapter is not None and adapter.kind is not AdapterKind.MANUAL:
+            return step.adapter, dict(step.params)
+    for step in recipe.manual_steps:
+        if get_adapter(step.adapter) is not None:
+            return step.adapter, dict(step.params)
+    return "manual", {}
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = {r["finding_id"]: r for r in ws.load_findings()}
+    row = rows.get(args.finding)
+    if row is None:
+        print(f"error: finding {args.finding} not found")
+        return 2
+
+    library = RecipeLibrary.load_builtin()
+    classifier = Classifier(library, Capabilities.detect())
+    finding = Finding.from_dict(row)
+    classification = classifier.classify(finding)
+    recipe = library.by_id(classification.selected_recipe_id)
+    if recipe is None:
+        print("error: no recipe for finding")
+        return 2
+
+    adapter_name, params = _select_adapter(recipe)
+    adapter = get_adapter(adapter_name)
+    if adapter is None:
+        print(f"error: adapter '{adapter_name}' not available")
+        return 2
+
+    assets = {a["asset_id"]: a for a in ws.load_assets()}
+    asset = assets.get(finding.asset_id, {})
+    hostnames = asset.get("fqdns", []) + asset.get("hostnames", [])
+    target = _finding_ip(row) or asset.get("primary_key", finding.asset_id)
+    if hostnames:
+        params.setdefault("vhost", hostnames[0])
+
+    ctx = ExecutionContext(
+        finding_id=finding.finding_id,
+        asset_id=finding.asset_id,
+        engagement_id=args.engagement,
+        target=target,
+        port=finding.port,
+        transport=finding.transport.value,
+        params=params,
+        operator=args.operator,
+        timeout=float(args.timeout),
+    )
+    executor = Executor(capabilities=Capabilities.detect(), evidence_root=ws.evidence_dir)
+    outcome = executor.run(
+        ctx=ctx, adapter=adapter, engagement=ws.engagement(), dry_run=not args.approve
+    )
+
+    print(f"finding:   {finding.finding_id}  ({finding.plugin_name})")
+    print(f"adapter:   {outcome.adapter}")
+    print(f"status:    {outcome.status.value}")
+    if outcome.planned_command:
+        print(f"command:   {' '.join(outcome.planned_command)}")
+    print(f"scope:     {outcome.scope_decision.get('reason', '')}")
+    for note in outcome.notes:
+        print(f"note:      {note}")
+    if outcome.status is OutcomeStatus.EXECUTED and outcome.evidence is not None:
+        ws.append_evidence(outcome.evidence.to_dict())
+        ws.append_audit_event({
+            "event": "run", "finding_id": finding.finding_id, "adapter": outcome.adapter,
+            "evidence_id": outcome.evidence.evidence_id, "operator": args.operator,
+        })
+        print(f"evidence:  {outcome.evidence.evidence_id} (sha256 {outcome.evidence.sha256[:12]})")
+        print(f"suggested: {outcome.suggested_verdict or '(none — reviewer decides)'}")
+        print("NOTE: the exit code did not set a verdict; a reviewer must decide.")
+    print("finding retained:", outcome.finding_retained)
+    return 0
+
+
+def cmd_evidence_request(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = {r["finding_id"]: r for r in ws.load_findings()}
+    row = rows.get(args.finding)
+    if row is None:
+        print(f"error: finding {args.finding} not found")
+        return 2
+    library = RecipeLibrary.load_builtin()
+    finding = Finding.from_dict(row)
+    classification = Classifier(library, Capabilities.detect()).classify(finding)
+    recipe = library.by_id(classification.selected_recipe_id)
+    print(f"finding:      {finding.finding_id} ({finding.plugin_name})")
+    print(f"disposition:  {classification.disposition}")
+    print("evidence required:")
+    steps = recipe.manual_steps if recipe else []
+    if steps:
+        for step in steps:
+            print(f"  - [{step.adapter}] {step.description}")
+    else:
+        print("  - Manual reviewer assessment.")
+    return 0
+
+
+def cmd_evidence_add(args: argparse.Namespace) -> int:
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    source = Path(args.file)
+    if not source.exists():
+        print(f"error: evidence file not found: {source}")
+        return 2
+    from vapt_verify.models.evidence import Evidence
+    from vapt_verify.utilities.hashing import sha256_file
+
+    rows = {r["finding_id"]: r for r in ws.load_findings()}
+    row = rows.get(args.finding)
+    if row is None:
+        print(f"error: finding {args.finding} not found")
+        return 2
+    import shutil as _shutil
+    import uuid as _uuid
+
+    evidence_id = _uuid.uuid4().hex
+    dest_dir = ws.evidence_dir / row["asset_id"] / args.finding
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"external_{evidence_id[:8]}_{source.name}"
+    _shutil.copy2(source, dest)
+    evidence = Evidence(
+        evidence_id=evidence_id,
+        finding_id=args.finding,
+        engagement_id=args.engagement,
+        asset_id=row["asset_id"],
+        adapter="external",
+        tool_name=args.tool or "external",
+        operator=args.operator,
+        parsed_observations={"note": args.note},
+        raw_evidence_path=str(dest),
+        sha256=sha256_file(dest),
+        sanitization_status="operator_supplied",
+        review_notes=args.note,
+    )
+    ws.append_evidence(evidence.to_dict())
+    ws.append_audit_event({"event": "evidence_add", "finding_id": args.finding,
+                           "evidence_id": evidence_id, "operator": args.operator})
+    print(f"Attached evidence {evidence_id} (sha256 {evidence.sha256[:12]}) to {args.finding}")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -618,6 +773,33 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument("--finding", default="")
     p_plan.add_argument("--asset", default="")
     p_plan.set_defaults(func=cmd_plan)
+
+    p_run = sub.add_parser("run", help="run a verification adapter (dry-run by default)")
+    add_base(p_run)
+    add_engagement(p_run)
+    p_run.add_argument("--finding", required=True)
+    p_run.add_argument("--approve", action="store_true",
+                       help="actually execute (default is dry-run)")
+    p_run.add_argument("--operator", default="unknown")
+    p_run.add_argument("--timeout", type=float, default=120.0)
+    p_run.set_defaults(func=cmd_run)
+
+    p_ev = sub.add_parser("evidence", help="manage evidence")
+    ev_sub = p_ev.add_subparsers(dest="evidence_command", required=True)
+    p_ev_req = ev_sub.add_parser("request", help="show the evidence a finding requires")
+    add_base(p_ev_req)
+    add_engagement(p_ev_req)
+    p_ev_req.add_argument("finding")
+    p_ev_req.set_defaults(func=cmd_evidence_request)
+    p_ev_add = ev_sub.add_parser("add", help="attach externally-collected evidence")
+    add_base(p_ev_add)
+    add_engagement(p_ev_add)
+    p_ev_add.add_argument("finding")
+    p_ev_add.add_argument("--file", required=True)
+    p_ev_add.add_argument("--tool", default="")
+    p_ev_add.add_argument("--note", default="")
+    p_ev_add.add_argument("--operator", default="unknown")
+    p_ev_add.set_defaults(func=cmd_evidence_add)
 
     p_legacy = sub.add_parser("legacy", help="legacy-compatibility commands")
     legacy_sub = p_legacy.add_subparsers(dest="legacy_command", required=True)
