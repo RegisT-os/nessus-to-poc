@@ -1,0 +1,71 @@
+<?xml version="1.0" ?>
+<NessusClientData_v2>
+  <Policy>
+    <policyName>Synthetic Example Policy</policyName>
+  </Policy>
+  <Report name="Synthetic Small Sample">
+    <ReportHost name="192.0.2.10">
+      <HostProperties>
+        <tag name="host-ip">192.0.2.10</tag>
+        <tag name="host-fqdn">web01.example-doc.test</tag>
+        <tag name="operating-system">Linux Kernel 5.x</tag>
+        <tag name="HOST_START">Mon Jul 20 09:00:00 2026</tag>
+        <tag name="HOST_END">Mon Jul 20 09:20:00 2026</tag>
+        <tag name="Credentialed_Scan">true</tag>
+      </HostProperties>
+      <ReportItem port="443" svc_name="https" protocol="tcp" severity="2" pluginID="51192" pluginName="SSL Certificate Cannot Be Trusted" pluginFamily="General">
+        <synopsis>The SSL certificate for this service cannot be trusted.</synopsis>
+        <description>The server's X.509 certificate cannot be trusted.</description>
+        <solution>Purchase or generate a proper certificate for this service.</solution>
+        <risk_factor>Medium</risk_factor>
+        <cvss3_base_score>6.5</cvss3_base_score>
+        <plugin_output>The following certificate was at the top of the chain: subject: CN=web01</plugin_output>
+      </ReportItem>
+      <ReportItem port="443" svc_name="https" protocol="tcp" severity="1" pluginID="57582" pluginName="SSL Self-Signed Certificate" pluginFamily="General">
+        <synopsis>The SSL certificate chain for this service ends in an unrecognized self-signed certificate.</synopsis>
+        <description>The X.509 certificate chain for this service is not signed by a recognized certificate authority.</description>
+        <solution>Purchase or generate a proper certificate for this service.</solution>
+        <risk_factor>Low</risk_factor>
+        <plugin_output>The following certificate was found to be self-signed: CN=web01</plugin_output>
+      </ReportItem>
+      <ReportItem port="22" svc_name="ssh" protocol="tcp" severity="2" pluginID="90317" pluginName="SSH Weak Algorithms Supported" pluginFamily="Misc.">
+        <synopsis>The remote SSH server is configured to allow weak encryption algorithms.</synopsis>
+        <description>Nessus has detected that the remote SSH server is configured to use Arcfour.</description>
+        <solution>Contact the vendor or consult product documentation to remove the weak ciphers.</solution>
+        <risk_factor>Medium</risk_factor>
+        <plugin_output>The following weak client-to-server encryption algorithms are supported: arcfour</plugin_output>
+      </ReportItem>
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="3" pluginID="123456" pluginName="Ubuntu Security Update for OpenSSL (Host-Level)" pluginFamily="Ubuntu Local Security Checks">
+        <synopsis>The remote Ubuntu host is missing one or more security updates.</synopsis>
+        <description>A credentialed local check found a missing OpenSSL package update.</description>
+        <solution>Update the affected openssl packages.</solution>
+        <risk_factor>High</risk_factor>
+        <cve>CVE-2026-0001</cve>
+        <plugin_output>Remote package installed : openssl_1.1.1-1ubuntu2.1 Should be : openssl_1.1.1-1ubuntu2.9</plugin_output>
+      </ReportItem>
+    </ReportHost>
+    <ReportHost name="192.0.2.20">
+      <HostProperties>
+        <tag name="host-ip">192.0.2.20</tag>
+        <tag name="operating-system">Windows Server 2019</tag>
+        <tag name="HOST_START">Mon Jul 20 09:00:00 2026</tag>
+        <tag name="HOST_END">Mon Jul 20 09:25:00 2026</tag>
+        <tag name="Credentialed_Scan">false</tag>
+      </HostProperties>
+      <ReportItem port="161" svc_name="snmp" protocol="udp" severity="2" pluginID="41028" pluginName="SNMP Agent Default Community Name (public)" pluginFamily="SNMP">
+        <synopsis>The community name of the remote SNMP server can be guessed.</synopsis>
+        <description>It is possible to obtain the default community name of the remote SNMP server.</description>
+        <solution>Disable the SNMP service or filter access to it.</solution>
+        <risk_factor>Medium</risk_factor>
+        <plugin_output>The remote SNMP server replies to the following community string: public</plugin_output>
+      </ReportItem>
+      <ReportItem port="3389" svc_name="msrdp" protocol="tcp" severity="0" pluginID="10940" pluginName="Windows Terminal Services Enabled" pluginFamily="Windows">
+        <synopsis>The remote host is running a Terminal Server (RDP).</synopsis>
+        <description>This informational finding records that RDP is available on the host.</description>
+        <solution>n/a</solution>
+        <risk_factor>None</risk_factor>
+        <plugin_output>Terminal Services is listening on this port.</plugin_output>
+      </ReportItem>
+    </ReportHost>
+  </Report>
+</NessusClientData_v2>

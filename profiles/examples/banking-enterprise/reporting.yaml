@@ -1,0 +1,6 @@
+# Reporting preferences (sanitized example).
+formats: [markdown, json, csv]
+retest_wording: "The condition was re-tested from the approved validation source."
+stakeholder_evidence:
+  - patch-management export for host-level findings
+  - administrator confirmation for RDP/NLA posture

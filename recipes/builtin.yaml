@@ -1,0 +1,454 @@
+# Built-in verification recipes (declarative — no executable code).
+#
+# Selection layers (task section 11), lowest number wins:
+#   1 plugin-specific | 2 category-specific | 3 plugin-family |
+#   4 service-generic | 5 capability-assisted | 6 manual fallback
+#
+# nmap_role records whether Nmap is primary / supporting / discovery_only /
+# inappropriate for THIS class of finding. Local/patch/app findings mark Nmap
+# inappropriate so they are never "verified" by a remote port scan.
+recipes:
+  - recipe_id: tls-certificate
+    version: "1"
+    family: tls_certificate
+    title: TLS certificate validation
+    selection_layer: 2
+    plugin_ids: ["51192", "57582", "15901", "35291", "45411", "42873", "20007"]
+    name_indicators:
+      - "SSL Certificate"
+      - "Self-Signed Certificate"
+      - "Certificate Cannot Be Trusted"
+      - "Certificate Expiry"
+      - "Certificate Chain"
+      - "Certificate Signed Using Weak"
+      - "Certificate with Wrong Hostname"
+    services: ["https", "smtps", "imaps", "pop3s", "ldaps", "ftps"]
+    transports: ["tcp"]
+    required_capabilities: ["openssl"]
+    optional_capabilities: ["testssl.sh", "sslscan", "nmap"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    preconditions:
+      - "Use the finding's hostname/FQDN for SNI; do not validate hostname mismatch by IP alone."
+    automated_steps:
+      - {mode: automated, adapter: openssl, capability: openssl,
+         description: "Retrieve the presented certificate using SNI.",
+         params: {command: s_client, servername_from: vhost}}
+      - {mode: automated, adapter: testssl, capability: testssl.sh, optional: true,
+         description: "Full certificate + protocol assessment with SNI."}
+    assisted_steps:
+      - {mode: assisted, adapter: nmap, capability: nmap,
+         description: "ssl-cert as supporting evidence only.",
+         params: {scripts: [ssl-cert]}}
+    manual_steps:
+      - {mode: manual, adapter: manual,
+         description: "Confirm chain/trust against the client's trust store if required."}
+    positive_evidence:
+      - "OpenSSL/testssl presents a certificate matching the reported condition (self-signed, expired, wrong host, weak signature)."
+    negative_evidence:
+      - "A valid, trusted, in-date certificate matching the hostname is presented."
+    inconclusive_conditions:
+      - "STARTTLS required but not negotiated; SNI-selected vhost differs; connection blocked."
+    known_limitations:
+      - "A load balancer or vhost may present a different certificate than the scanner saw."
+    verdict_suggestions:
+      positive: confirmed
+      negative: not_reproduced
+      blocked: network_path_blocked
+
+  - recipe_id: tls-protocol-cipher
+    version: "1"
+    family: tls_certificate
+    title: Weak TLS protocol / cipher negotiation
+    selection_layer: 2
+    plugin_ids: ["20007", "26928", "42873", "62565", "94437", "104743", "157288"]
+    name_indicators:
+      - "SSL Version 2 and 3"
+      - "TLS Version 1.0"
+      - "TLS Version 1.1"
+      - "SSL Medium Strength"
+      - "SSL Weak Cipher"
+      - "SSL RC4 Cipher"
+      - "SSL 64-bit Block Size"
+      - "SSL DROWN"
+    services: ["https", "smtps", "imaps", "pop3s", "ldaps"]
+    transports: ["tcp"]
+    required_capabilities: ["openssl"]
+    optional_capabilities: ["testssl.sh", "sslscan", "nmap"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    automated_steps:
+      - {mode: automated, adapter: openssl, capability: openssl,
+         description: "Negotiate the specific protocol/cipher to confirm support.",
+         params: {command: s_client, servername_from: vhost}}
+      - {mode: automated, adapter: sslscan, capability: sslscan, optional: true,
+         description: "Enumerate accepted protocols and ciphers."}
+      - {mode: automated, adapter: testssl, capability: testssl.sh, optional: true,
+         description: "Authoritative protocol/cipher assessment."}
+    assisted_steps:
+      - {mode: assisted, adapter: nmap, capability: nmap,
+         description: "ssl-enum-ciphers as supporting evidence.",
+         params: {scripts: [ssl-enum-ciphers]}}
+    positive_evidence: ["The weak protocol/cipher is successfully negotiated."]
+    negative_evidence: ["The weak protocol/cipher is refused by the server."]
+    known_limitations:
+      - "Nmap ssl-enum-ciphers can differ from a real client handshake; OpenSSL/testssl is authoritative."
+    verdict_suggestions: {positive: confirmed, negative: not_reproduced}
+
+  - recipe_id: ssh-weak-algorithms
+    version: "1"
+    family: ssh
+    title: SSH weak algorithms / ciphers / MACs
+    selection_layer: 2
+    plugin_ids: ["90317", "70658", "153953", "71049"]
+    name_indicators:
+      - "SSH Weak Algorithms"
+      - "SSH Weak MAC"
+      - "SSH Server CBC Mode"
+      - "SSH Weak Key Exchange"
+    services: ["ssh"]
+    transports: ["tcp"]
+    required_capabilities: ["ssh-audit"]
+    optional_capabilities: ["nmap"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    automated_steps:
+      - {mode: automated, adapter: ssh_audit, capability: ssh-audit,
+         description: "Enumerate offered SSH algorithms/MACs/KEX."}
+    assisted_steps:
+      - {mode: assisted, adapter: nmap, capability: nmap,
+         description: "ssh2-enum-algos as supporting evidence.",
+         params: {scripts: [ssh2-enum-algos]}}
+    positive_evidence: ["The weak algorithm/MAC/cipher is offered by the server."]
+    negative_evidence: ["The weak algorithm is not offered."]
+    verdict_suggestions: {positive: confirmed, negative: not_reproduced}
+
+  - recipe_id: ssh-terrapin
+    version: "1"
+    family: ssh
+    title: SSH Terrapin (CVE-2023-48795) prefix truncation
+    selection_layer: 1
+    plugin_ids: ["187315", "187316"]
+    name_indicators: ["Terrapin"]
+    text_indicators: ["CVE-2023-48795", "prefix truncation"]
+    services: ["ssh"]
+    transports: ["tcp"]
+    required_capabilities: ["ssh-audit"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    automated_steps:
+      - {mode: automated, adapter: ssh_audit, capability: ssh-audit,
+         description: "Check for ChaCha20-Poly1305 / CBC-EtM and absence of strict-kex."}
+    manual_steps:
+      - {mode: manual, adapter: manual,
+         description: "Algorithm enumeration is supporting evidence only; confirm the vulnerable modes are negotiable and strict key exchange is unsupported."}
+    positive_evidence:
+      - "Server offers a vulnerable mode AND lacks kex-strict; assessed as likely_confirmed, not confirmed, from enumeration alone."
+    inconclusive_conditions: ["Enumeration alone cannot prove exploitability of the handshake."]
+    known_limitations:
+      - "Algorithm enumeration does not exercise the handshake; a positive verdict requires more than enum output."
+    # Deliberately NOT 'confirmed' from enumeration alone (task test 22.16).
+    verdict_suggestions: {positive: likely_confirmed}
+
+  - recipe_id: rdp-security
+    version: "1"
+    family: rdp
+    title: RDP encryption / NLA posture
+    selection_layer: 2
+    plugin_ids: ["30218", "57690", "58453", "18405"]
+    name_indicators:
+      - "Terminal Services Encryption Level"
+      - "Network Level Authentication"
+      - "Terminal Services"
+      - "Remote Desktop Protocol"
+    services: ["msrdp", "ms-wbt-server", "rdp"]
+    transports: ["tcp"]
+    optional_capabilities: ["nmap", "openssl"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    assisted_steps:
+      - {mode: assisted, adapter: nmap, capability: nmap,
+         description: "rdp-enum-encryption / rdp-ntlm-info as supporting evidence.",
+         params: {scripts: [rdp-enum-encryption, rdp-ntlm-info]}}
+    manual_steps:
+      - {mode: manual, adapter: administrative,
+         description: "Confirm NLA/encryption posture via host configuration evidence; do not infer full posture from port 3389 alone."}
+    known_limitations: ["Port 3389 open does not establish the RDP security posture."]
+    verdict_suggestions: {positive: likely_confirmed}
+
+  - recipe_id: snmp-default-community
+    version: "1"
+    family: snmp
+    title: SNMP default / guessable community
+    selection_layer: 2
+    plugin_ids: ["41028", "10264", "76474"]
+    name_indicators: ["SNMP Agent Default Community", "SNMP", "Community"]
+    services: ["snmp"]
+    transports: ["udp"]
+    required_capabilities: ["snmpget"]
+    optional_capabilities: ["snmpwalk", "nmap"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    preconditions:
+      - "Test only the community strings reported by the scanner. Do NOT guess/brute-force unless explicitly authorised."
+    automated_steps:
+      - {mode: automated, adapter: snmp, capability: snmpget,
+         description: "Query sysDescr with the reported community only.",
+         params: {oid: "1.3.6.1.2.1.1.1.0"}}
+    positive_evidence: ["The reported community returns SNMP data."]
+    negative_evidence: ["The community is rejected."]
+    verdict_suggestions: {positive: confirmed, negative: not_reproduced}
+
+  - recipe_id: http-header-hygiene
+    version: "1"
+    family: http_web
+    title: HTTP response header / cookie hygiene
+    selection_layer: 2
+    name_indicators:
+      - "HTTP Security Header"
+      - "Clickjacking"
+      - "X-Frame-Options"
+      - "Strict-Transport-Security"
+      - "HSTS"
+      - "Content-Security-Policy"
+      - "X-Content-Type-Options"
+      - "Cookie Without Secure"
+      - "Cookie Without HttpOnly"
+      - "Cleartext"
+    services: ["www", "http", "https", "http-alt", "http-proxy"]
+    transports: ["tcp"]
+    required_capabilities: ["curl"]
+    optional_capabilities: ["httpx"]
+    nmap_role: inappropriate
+    safety_class: active_nonintrusive
+    automated_steps:
+      - {mode: automated, adapter: http, capability: curl,
+         description: "Fetch headers with the correct Host/SNI and inspect them.",
+         params: {method: HEAD, follow_redirects: true, servername_from: vhost}}
+    positive_evidence: ["The header/cookie flag is missing or misconfigured as reported."]
+    negative_evidence: ["The header/cookie flag is present and correct."]
+    known_limitations: ["Header presence can vary by path, vhost and backend."]
+    verdict_suggestions: {positive: confirmed, negative: not_reproduced}
+
+  - recipe_id: web-application-security
+    version: "1"
+    family: application_security
+    title: Application-level vulnerability (manual)
+    selection_layer: 3
+    plugin_families: ["CGI abuses", "CGI abuses : XSS", "Web Servers"]
+    name_indicators:
+      - "SQL Injection"
+      - "Cross-Site Scripting"
+      - "XSS"
+      - "Cross-Site Request Forgery"
+      - "CSRF"
+      - "Local File Inclusion"
+      - "Remote File Inclusion"
+      - "Directory Traversal"
+      - "IDOR"
+      - "Authentication Bypass"
+      - "File Upload"
+    services: ["www", "http", "https"]
+    nmap_role: inappropriate
+    safety_class: manual
+    manual_steps:
+      - {mode: manual, adapter: manual,
+         description: "Reproduce with an authorised test account and role; capture request/response evidence. Application context is required."}
+    known_limitations: ["Application-layer issues cannot be validated by a port scan."]
+    verdict_suggestions: {}
+
+  - recipe_id: patch-local-check
+    version: "1"
+    family: patch_local_config
+    title: Missing patch / local configuration (credentialed/administrative)
+    selection_layer: 3
+    plugin_families:
+      - "Ubuntu Local Security Checks"
+      - "Red Hat Local Security Checks"
+      - "CentOS Local Security Checks"
+      - "Debian Local Security Checks"
+      - "SuSE Local Security Checks"
+      - "Windows : Microsoft Bulletins"
+      - "Windows"
+      - "Misc."
+      - "Policy Compliance"
+      - "Settings"
+    name_indicators:
+      - "Security Update"
+      - "Missing Patch"
+      - "Hotfix"
+      - "KB"
+      - "Local Checks"
+    nmap_role: inappropriate
+    auth_requirement: credentialed
+    safety_class: manual
+    preconditions:
+      - "Remote Nmap results must NEVER be used to invalidate a credentialed local-check finding."
+    manual_steps:
+      - {mode: manual, adapter: credentialed,
+         description: "Re-verify via credentialed rescan / package-manager or patch-management evidence."}
+      - {mode: manual, adapter: administrative,
+         description: "Collect administrator-supplied patch/package/registry evidence."}
+    positive_evidence: ["Credentialed rescan or package inventory confirms the missing patch."]
+    negative_evidence: ["Package/patch evidence shows the fix is installed."]
+    known_limitations: ["No remote unauthenticated method reproduces a local-check plugin."]
+    verdict_suggestions: {}
+
+  - recipe_id: vmware-hypervisor-advisory
+    version: "1"
+    family: hypervisor
+    title: VMware / hypervisor advisory (build/patch evidence)
+    selection_layer: 2
+    name_indicators: ["VMware", "ESXi", "vCenter", "vSphere", "Hypervisor"]
+    plugin_families: ["Misc.", "General"]
+    nmap_role: supporting
+    auth_requirement: administrative
+    safety_class: manual
+    preconditions:
+      - "A generic version-detection script does not definitively confirm or disprove a vendor advisory."
+    manual_steps:
+      - {mode: manual, adapter: administrative,
+         description: "Request the exact product build/patch level and map it to the vendor advisory (KB/VMSA)."}
+    positive_evidence: ["The reported build is at or below the vulnerable build per the advisory."]
+    negative_evidence: ["The build is at or above the fixed build per the advisory."]
+    known_limitations: ["Network-exposed version banners are supporting evidence only."]
+    verdict_suggestions: {}
+
+  - recipe_id: smb-windows
+    version: "1"
+    family: smb_windows
+    title: SMB / Windows service exposure
+    selection_layer: 2
+    name_indicators: ["SMB", "SMBv1", "Server Message Block", "MS17-010", "NetBIOS"]
+    services: ["cifs", "smb", "microsoft-ds", "netbios-ssn"]
+    transports: ["tcp"]
+    optional_capabilities: ["smbclient", "nmap"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    assisted_steps:
+      - {mode: assisted, adapter: smb, capability: smbclient,
+         description: "Enumerate SMB dialects / shares (non-destructive)."}
+      - {mode: assisted, adapter: nmap, capability: nmap,
+         description: "smb-protocols / smb-security-mode as supporting evidence.",
+         params: {scripts: [smb-protocols, smb-security-mode]}}
+    manual_steps:
+      - {mode: manual, adapter: administrative,
+         description: "Do not use a remote port scan to invalidate a credentialed Windows finding."}
+    verdict_suggestions: {positive: likely_confirmed}
+
+  - recipe_id: dns-service
+    version: "1"
+    family: dns
+    title: DNS service configuration
+    selection_layer: 2
+    name_indicators: ["DNS", "Zone Transfer", "Recursion", "DNSSEC"]
+    services: ["domain", "dns"]
+    transports: ["udp", "tcp"]
+    required_capabilities: ["dig"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    preconditions: ["Perform zone transfers only when explicitly authorised."]
+    automated_steps:
+      - {mode: automated, adapter: dns, capability: dig,
+         description: "Query the server and test recursion/DNSSEC as reported."}
+    verdict_suggestions: {positive: confirmed, negative: not_reproduced}
+
+  - recipe_id: ldap-directory
+    version: "1"
+    family: ldap_ad
+    title: LDAP / directory service
+    selection_layer: 2
+    name_indicators: ["LDAP", "Active Directory", "Kerberos"]
+    services: ["ldap", "ldaps", "kerberos"]
+    transports: ["tcp"]
+    required_capabilities: ["ldapsearch"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    preconditions: ["Reachable LDAP does not confirm an AD configuration vulnerability."]
+    automated_steps:
+      - {mode: automated, adapter: ldap, capability: ldapsearch,
+         description: "Query the rootDSE / anonymous bind posture as reported."}
+    manual_steps:
+      - {mode: manual, adapter: credentialed,
+         description: "Directory configuration issues require credentialed queries or administrative evidence."}
+    verdict_suggestions: {}
+
+  - recipe_id: database-service
+    version: "1"
+    family: database
+    title: Database service exposure
+    selection_layer: 2
+    name_indicators: ["SQL Server", "MySQL", "PostgreSQL", "Oracle", "Redis", "MongoDB", "Database"]
+    services: ["ms-sql-s", "mysql", "postgresql", "oracle", "redis", "mongod", "mongodb"]
+    transports: ["tcp"]
+    optional_capabilities: ["nmap"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    preconditions: ["No password attacks by default."]
+    manual_steps:
+      - {mode: manual, adapter: database,
+         description: "Safe connection/version check with a native client; authenticated config queries only where permitted."}
+    verdict_suggestions: {positive: likely_confirmed}
+
+  - recipe_id: mail-smtp
+    version: "1"
+    family: mail
+    title: Mail service (SMTP/STARTTLS)
+    selection_layer: 2
+    name_indicators: ["SMTP", "STARTTLS", "Mail", "Open Relay"]
+    services: ["smtp", "smtps", "submission", "imap", "imaps", "pop3", "pop3s"]
+    transports: ["tcp"]
+    optional_capabilities: ["swaks", "openssl"]
+    nmap_role: supporting
+    safety_class: active_nonintrusive
+    preconditions: ["Safe relay testing only when explicitly permitted."]
+    automated_steps:
+      - {mode: automated, adapter: openssl, capability: openssl, optional: true,
+         description: "STARTTLS negotiation check.",
+         params: {command: s_client, starttls_from: service}}
+    verdict_suggestions: {positive: confirmed, negative: not_reproduced}
+
+  - recipe_id: port-service-exposure
+    version: "1"
+    family: port_service_exposure
+    title: Basic port / service exposure
+    selection_layer: 4
+    transports: ["tcp", "udp"]
+    optional_capabilities: ["nmap"]
+    nmap_role: primary
+    safety_class: active_nonintrusive
+    automated_steps:
+      - {mode: automated, adapter: tcp, capability: "",
+         description: "TCP connect check to confirm the port is reachable from the validation source."}
+      - {mode: automated, adapter: nmap, capability: nmap, optional: true,
+         description: "Service/version detection.",
+         params: {service_detection: true}}
+    positive_evidence: ["The port accepts a connection from the validation source."]
+    negative_evidence: ["The port is closed/filtered from the validation source."]
+    known_limitations: ["Reachability is not the same as vulnerability confirmation."]
+    verdict_suggestions: {positive: confirmed, negative: service_not_currently_observed}
+
+  - recipe_id: informational-retained
+    version: "1"
+    family: informational
+    title: Informational finding (retained)
+    selection_layer: 5
+    nmap_role: discovery_only
+    safety_class: passive
+    manual_steps:
+      - {mode: manual, adapter: manual,
+         description: "Retained for context/inventory. Classify what context it provides; no active validation required."}
+    verdict_suggestions: {}
+
+  - recipe_id: manual-review-fallback
+    version: "1"
+    family: generic
+    title: Manual review fallback
+    selection_layer: 6
+    nmap_role: inappropriate
+    safety_class: manual
+    manual_steps:
+      - {mode: manual, adapter: manual,
+         description: "No specific recipe matched. A reviewer must determine the appropriate validation method."}
+    known_limitations: ["Fallback recipe: matched only because no more specific recipe applied."]
+    verdict_suggestions: {}

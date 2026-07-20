@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vapt-verify"
+version = "1.0.0"
+description = "VAPT Verification Orchestrator — local-first, multi-engagement vulnerability verification and evidence orchestration platform."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [{ name = "VAPT Tooling Team" }]
+keywords = ["nessus", "vulnerability", "verification", "vapt", "evidence", "pentest"]
+
+# Runtime dependencies are deliberately minimal for the local-first v0.1 core.
+# defusedxml is used for safe (entity-expansion-resistant) Nessus XML parsing.
+# PyYAML is used for engagement/profile configuration files.
+dependencies = [
+    "defusedxml>=0.7.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML",
+]
+
+[project.scripts]
+vapt-verify = "vapt_verify.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vapt_verify = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# Tooling configuration
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "C4", "SIM", "RUF"]
+# S603/S607: subprocess use is intentional and safeguarded in adapter layers
+# (argument arrays, no shell=True). Not relevant to the v0.1 import core.
+ignore = ["S101"]  # allow `assert` in tests
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "E501"]
+"legacy/**" = ["ALL"]  # preserved legacy artifact; not linted or maintained
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["vapt_verify"]
+mypy_path = "src"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+exclude = ["legacy/", "build/"]
+
+[[tool.mypy.overrides]]
+module = ["defusedxml.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

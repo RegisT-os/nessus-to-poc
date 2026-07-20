@@ -1,0 +1,9 @@
+# Scope overrides (sanitized example). Merged into the engagement; additive only.
+approved_cidrs:
+  - 192.0.2.0/24
+  - 198.51.100.0/24
+approved_hostnames:
+  - web01.example-doc.test
+  - db01.example-doc.test
+excluded_targets:
+  - 192.0.2.254

@@ -1,0 +1,68 @@
+# ---------------------------------------------------------------------------
+# VAPT Verification Orchestrator — repository safety .gitignore
+#
+# The rules in this file exist to PREVENT real client data, private engagement
+# profiles, credentials and imported scanner output from ever being committed.
+# Do not relax these rules without reviewing docs/SECURITY.md. The automated
+# client-data safety checker (`vapt-verify security scan`) also enforces this.
+# ---------------------------------------------------------------------------
+
+# --- Private engagement profiles (real client data lives here, local only) ---
+# Ignore ALL contents but keep the directory via .gitkeep. The `/*` form (not
+# `profiles/private/`) is required so the .gitkeep negation can take effect.
+profiles/private/*
+!profiles/private/.gitkeep
+
+# --- Real scanner exports must never be committed ---
+# Synthetic test fixtures live under tests/fixtures/ and are the ONLY .nessus
+# files permitted in the repository; they are force-added explicitly there.
+*.nessus
+*.nessus.xml
+!tests/fixtures/**/*.nessus
+
+# Other raw scanner exports
+*.csv
+!tests/fixtures/**/*.csv
+!profiles/examples/**/*.csv
+*.qualys.xml
+*.openvas.xml
+
+# --- Generated engagement workspaces / evidence bundles ---
+engagements/*
+!engagements/.gitkeep
+evidence/
+reports/local/
+
+# --- Credentials & secrets ---
+*.pem
+*.key
+*.pfx
+*.p12
+.env
+.env.*
+secrets.yaml
+secrets.yml
+*.secret
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Editor / OS noise ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
