@@ -1,0 +1,17 @@
+# PROVENANCE: AUTHORED from vendor documentation/manpage output shapes.
+# The tool was NOT available in the build environment, so this fixture encodes
+# an ASSUMPTION about the format. Replace with a real capture when possible.
+# See tests/conformance_cases.py (Provenance.AUTHORED).
+Testing SSL server 192.0.2.10 on port 443 using SNI name web01.example-doc.test
+
+  SSL/TLS Protocols:
+SSLv2     disabled
+SSLv3     disabled
+TLSv1.0   enabled
+TLSv1.1   enabled
+TLSv1.2   enabled
+TLSv1.3   disabled
+
+  Supported Server Cipher(s):
+Accepted  TLSv1.0  128 bits  AES128-SHA
+Accepted  TLSv1.2  256 bits  ECDHE-RSA-AES256-GCM-SHA384

@@ -1,0 +1,12 @@
+Can't use SSL_get_servername
+depth=0 CN = conformance.example.test
+verify error:num=18:self-signed certificate
+CONNECTION ESTABLISHED
+Protocol version: TLSv1.3
+Ciphersuite: TLS_AES_256_GCM_SHA384
+Peer certificate: CN = conformance.example.test
+Hash used: SHA256
+Signature type: RSA-PSS
+Verification error: self-signed certificate
+Server Temp Key: X25519, 253 bits
+DONE

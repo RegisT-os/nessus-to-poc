@@ -159,9 +159,15 @@ any step ever acquiring the authority to decide a verdict.
 - **v3.3 — Evidence chaining & lineage.** One step's parsed observations
   condition the next; each evidence record stores its parent, so a chain is
   reconstructable end to end. Extends `poc export` to render a chain.
-- **v3.4 — Adapter conformance suite.** Golden-output fixtures captured from
-  real tools; every adapter parser is tested against them. Directly prevents the
-  class of bug found in the OpenSSL `-brief` parser.
+- **v3.4 — Adapter conformance suite.** ✅ **(delivered)** Golden-output
+  fixtures with explicit provenance (`REAL_CAPTURE` vs `AUTHORED`); every
+  adapter parser is tested against them, every parser's verdict entitlement is
+  asserted, and each fixture's captured invocation is pinned to what the
+  adapter's `build_argv` produces today — so a flag change that would leave the
+  parser reading a format the adapter never requests fails immediately. Real
+  captures for openssl (brief, full, refused) and curl; authored fixtures are
+  labelled in-file and auto-upgraded to a hard failure once the tool is
+  installed locally. Directly prevents the OpenSSL `-brief` class of bug.
 - **v3.5 — Adapter plugin SDK.** Third-party adapters declaring capability,
   safety class and parser contract; loaded from an allow-listed directory.
   Plugins declare, they do not execute arbitrary recipe content.

@@ -1,0 +1,16 @@
+# PROVENANCE: AUTHORED from vendor documentation/manpage output shapes.
+# The tool was NOT available in the build environment, so this fixture encodes
+# an ASSUMPTION about the format. Replace with a real capture when possible.
+# See tests/conformance_cases.py (Provenance.AUTHORED).
+; <<>> DiG 9.18.18 <<>> @192.0.2.53 example-doc.test NS
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 42137
+;; flags: qr rd ra; QUERY: 1, ANSWER: 2, AUTHORITY: 0, ADDITIONAL: 1
+
+;; ANSWER SECTION:
+example-doc.test.  3600  IN  NS  ns1.example-doc.test.
+
+;; Query time: 4 msec
+;; SERVER: 192.0.2.53#53(192.0.2.53) (UDP)

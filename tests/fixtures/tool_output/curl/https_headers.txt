@@ -1,0 +1,6 @@
+HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.11.15
+Date: Tue, 28 Jul 2026 20:58:30 GMT
+Content-type: text/html; charset=utf-8
+Content-Length: 908
+

@@ -1,0 +1,40 @@
+Can't use SSL_get_servername
+depth=0 CN = conformance.example.test
+verify error:num=18:self-signed certificate
+verify return:1
+depth=0 CN = conformance.example.test
+verify return:1
+CONNECTED(00000003)
+---
+Certificate chain
+ 0 s:CN = conformance.example.test
+   i:CN = conformance.example.test
+   a:PKEY: rsaEncryption, 2048 (bit); sigalg: RSA-SHA256
+   v:NotBefore: Jul 28 20:57:32 2026 GMT; NotAfter: Jul 29 20:57:32 2026 GMT
+---
+Server certificate
+-----BEGIN CERTIFICATE-----
+MIIDJzCCAg+gAwIBAgIUNyrEqp6NIVfzRb3dcFE38NpWxC4wDQYJKoZIhvcNAQEL
+BQAwIzEhMB8GA1UEAwwYY29uZm9ybWFuY2UuZXhhbXBsZS50ZXN0MB4XDTI2MDcy
+ODIwNTczMloXDTI2MDcyOTIwNTczMlowIzEhMB8GA1UEAwwYY29uZm9ybWFuY2Uu
+ZXhhbXBsZS50ZXN0MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAq0s8
+lU7BRxPBJFSGVsE+suqDCLVxVuhW6NFpqZx+O41Wq97Tdi8OEGiNcNntt9GEYsAP
+5+8c6f7RuNOCnXWDhlZr0ZoWYQNdtzx8lhSnPpX44tignzjQI4lCUQRozRRLLQHC
+0iak8Wxxhz/VRxvQd81F/NifpdekgnvLshePyOMnLCmMq/XtYEP9RDXg1Fc3diT5
+1UMCeKI83J3PsYpEWssWQmUgLtv3y01REI0X20lDE7NrVz906x01xk0OeOwIkB9J
+7/hLJqhjfqaYdx7hRyQZSHWwNzq4RXbG7438vw2MJapemeLWL8gsMl1sup6C9Rs5
+ZDRE97m9YZsxaL/r0QIDAQABo1MwUTAdBgNVHQ4EFgQUMoIlBu0LOlmmUlPZAnif
+peZDux0wHwYDVR0jBBgwFoAUMoIlBu0LOlmmUlPZAnifpeZDux0wDwYDVR0TAQH/
+BAUwAwEB/zANBgkqhkiG9w0BAQsFAAOCAQEAh5rzp1NCVUuyXoaMIvqL6WZ14PzC
+BY8dWI9X7cixl4ouVYGEG5TF07y0uAy7QQPrA2g+z2pmqCQzgYg6uTl/Mrov7d/a
+V+b8zNN4FfrQ6xustDZb5x4+vsf3r17NQ8FyVu5ex88jUgOt40lFml0AsymHvbNU
+qcME/bpF76MuwDXt+FT8Ns2q1/HUx9EWn9nCedL++cjsnPu7reYLlGlqBrabsDdK
+VL4Ifg0yzraq7Ca7K0kBmes2kKP5ErjkrunOTKTNjEsK6VzI6DrCuJQJ/OR/ZqNj
+GzTk2MpZ+u99Z8UFGizq0AI1zTg8sJZUSJYvL8CF63DBoBwFAJnXCcdv5A==
+-----END CERTIFICATE-----
+subject=CN = conformance.example.test
+issuer=CN = conformance.example.test
+---
+No client certificate CA names sent
+Peer signing digest: SHA256
+Peer signature type: RSA-PSS

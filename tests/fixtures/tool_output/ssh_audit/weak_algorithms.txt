@@ -1,0 +1,19 @@
+# PROVENANCE: AUTHORED from vendor documentation/manpage output shapes.
+# The tool was NOT available in the build environment, so this fixture encodes
+# an ASSUMPTION about the format. Replace with a real capture when possible.
+# See tests/conformance_cases.py (Provenance.AUTHORED).
+# general
+(gen) banner: SSH-2.0-OpenSSH_8.2p1 Ubuntu-4ubuntu0.5
+(gen) software: OpenSSH 8.2p1
+(gen) compatibility: OpenSSH 7.4+, Dropbear SSH 2018.76+
+
+# key exchange algorithms
+(kex) diffie-hellman-group14-sha1     -- [fail] using weak hashing algorithm
+(kex) curve25519-sha256               -- [info] available since OpenSSH 7.4
+
+# encryption algorithms (ciphers)
+(enc) aes128-cbc                      -- [fail] using weak cipher mode
+(enc) aes256-ctr                      -- [info] available since OpenSSH 3.7
+
+# message authentication code algorithms
+(mac) hmac-sha1                       -- [fail] using weak hashing algorithm

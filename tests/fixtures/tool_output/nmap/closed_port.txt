@@ -1,0 +1,12 @@
+# PROVENANCE: AUTHORED from vendor documentation/manpage output shapes.
+# The tool was NOT available in the build environment, so this fixture encodes
+# an ASSUMPTION about the format. Replace with a real capture when possible.
+# See tests/conformance_cases.py (Provenance.AUTHORED).
+Starting Nmap 7.94 ( https://nmap.org ) at 2026-07-28 12:00 UTC
+Nmap scan report for 192.0.2.10
+Host is up (0.00039s latency).
+
+PORT     STATE  SERVICE
+8443/tcp closed https-alt
+
+Nmap done: 1 IP address (1 host up) scanned in 0.31 seconds
