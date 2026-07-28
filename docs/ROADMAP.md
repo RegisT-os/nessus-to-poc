@@ -114,22 +114,32 @@ checklist, no known finding-loss path.
 Each major version keeps every invariant above, remains local-first by default,
 and expands into its own slice plan when work begins.
 
-## v2.0 — Multi-Scanner Correlation & Source of Truth
+## v2.0 — Multi-Scanner Correlation & Source of Truth ✅ (delivered)
 
 *Theme: one defensible inventory across many scanners.*
 
-- Production-parity importers for all v0.8 sources, each lossless and reconciled
-  independently.
-- Cross-scanner **correlation** of findings and assets *with provenance*: link
-  candidates across scanners, never merge away identity or source.
-- Unified but non-lossy finding taxonomy; a canonical view layered over — not
-  replacing — each scanner's raw record.
-- Asset reconciliation across sources with explicit identity-confidence.
-- Import-set diffing (what a new scan added / changed / no longer reports),
-  where "no longer reported" is a state, never a deletion.
+Delivered in `vapt_verify/correlation/`:
 
-Guardrail: correlation produces *links and candidate groups*, never silent
-de-duplication. A merged view must always be decomposable back to sources.
+- Cross-scanner **correlation** of findings *with provenance*, using layered
+  bases (identical fingerprint → plugin+location → shared CVE+location →
+  normalized title+location), each carrying a confidence and a written
+  rationale. `vapt-verify correlate`.
+- **Asset identity reconciliation** across sources (`identities`), linked by
+  MAC / IP / FQDN with explicit confidence. A shared IP is recorded as a
+  *candidate* — never a merge — because an IP can be reassigned.
+- **Import-set diffing** (`diff`): still / newly / no-longer reported, plus
+  severity changes, matched correlation-aware so it works across scanners.
+- The correlation layer is additive: it references finding ids and never
+  mutates or removes a record, so any group decomposes back to its sources.
+
+Guardrail (enforced by tests): correlation produces *links and candidate
+groups*, never silent de-duplication; `grouped + singletons == total findings`;
+"no longer reported" is a state, never a deletion, and never an automatic
+false positive or remediation claim.
+
+Still open for a later slice: production-parity importers for
+OpenVAS/Greenbone, Qualys and Rapid7 (they reuse the shared normalizer added in
+v0.8, so this is importer work, not core work).
 
 ## v3.0 — Verification Orchestration at Scale
 

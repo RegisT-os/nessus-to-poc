@@ -20,7 +20,7 @@ from collections.abc import Iterable
 _ID_LENGTH = 16
 
 
-def _digest(parts: Iterable[str], length: int = _ID_LENGTH) -> str:
+def stable_digest(parts: Iterable[str], length: int = _ID_LENGTH) -> str:
     """Return a stable hex digest over ``parts``, using a NUL separator.
 
     A NUL separator avoids ambiguity where field boundaries could otherwise be
@@ -28,6 +28,10 @@ def _digest(parts: Iterable[str], length: int = _ID_LENGTH) -> str:
     """
     joined = "\x00".join(parts)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:length]
+
+
+# Internal alias retained for readability within this module.
+_digest = stable_digest
 
 
 def asset_id(engagement_id: str, *, primary_key: str) -> str:

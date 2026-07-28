@@ -30,6 +30,10 @@ src/vapt_verify/
 ├── reconciliation/
 │   ├── stats.py             # import statistics (section 14)
 │   └── gate.py              # fail-closed accounting gate
+├── correlation/             # (v2.0) cross-scanner links, asset identities, diff
+│   ├── models.py            #   CorrelationGroup / AssetIdentityGroup / report
+│   ├── engine.py            #   layered link bases, strongest signal first
+│   └── diff.py              #   import-set diff ("no longer reported" is a state)
 ├── classification/          # (v0.2) explainable recipe selection
 ├── recipes/                 # (v0.2) versioned, declarative recipe library
 ├── planning/                # (v0.2) per-finding / per-asset verification plans
@@ -85,6 +89,13 @@ EngagementWorkspace.persist_import()
 - **Fail closed.** The reconciliation gate makes `import` return non-zero when
   the accounting identity does not hold, or when explicit exceptions exist and
   have not been acknowledged.
+- **Correlation is additive (v2.0).** Cross-scanner grouping produces a separate
+  layer that *references* finding ids; it never mutates, merges or removes a
+  finding. `grouped + singletons == total findings` is the correlation-side
+  analogue of the import reconciliation gate, and is asserted by tests.
+- **Recipes ship inside the package.** `recipes/data/*.yaml` is package data
+  loaded via `importlib.resources`, so classification works in every install
+  layout (a repo-relative path previously broke non-editable installs).
 
 ## Dependencies
 

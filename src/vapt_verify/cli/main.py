@@ -83,15 +83,17 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         location = shutil.which(tool)
         print(f"  {tool:<12} {location if location else 'not found'}")
 
+    # PATH is advisory, not a failure: an unactivated virtualenv is a normal,
+    # working setup. Only genuinely broken state (above) sets ok=False.
     scripts_dir = Path(sys.executable).parent
     if shutil.which("vapt-verify") is None:
-        ok = False
-        print("\nNOTE: 'vapt-verify' is not on PATH. Invoke it explicitly:")
-        if platform.system() == "Windows":
-            print(rf"  {scripts_dir}\vapt-verify.exe doctor")
-            print(f"  (or: {sys.executable} -m vapt_verify.cli.main doctor)")
-        else:
-            print(f"  {scripts_dir}/vapt-verify doctor")
+        on_disk = scripts_dir / ("vapt-verify.exe" if platform.system() == "Windows"
+                                 else "vapt-verify")
+        print("\nNOTE: 'vapt-verify' is not on PATH (normal if the venv is not activated).")
+        if on_disk.exists():
+            print(f"      The command is installed at: {on_disk}")
+        print("      Invoke it either way with:")
+        print(f"        {sys.executable} -m vapt_verify doctor")
 
     print("\nRESULT: " + ("environment looks healthy." if ok else "problems found (see above)."))
     return 0 if ok else 1
@@ -878,6 +880,117 @@ def cmd_restore(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_correlate(args: argparse.Namespace) -> int:
+    from vapt_verify.correlation import CorrelationEngine
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    findings = ws.load_findings()
+    assets = ws.load_assets()
+    report = CorrelationEngine().correlate(findings=findings, assets=assets)
+    payload = report.to_dict()
+    path = ws.save_correlation(payload)
+    ws.append_audit_event({
+        "event": "correlate",
+        "finding_groups": len(report.finding_groups),
+        "cross_scanner_groups": len(report.cross_scanner_groups),
+    })
+
+    counts = payload["counts"]
+    print(f"Correlated {report.total_findings} finding(s) across "
+          f"{len(report.scanners)} scanner(s): {', '.join(report.scanners) or '(none)'}")
+    print(f"  finding groups:        {counts['finding_groups']}")
+    print(f"  cross-scanner groups:  {counts['cross_scanner_groups']}")
+    print(f"  grouped findings:      {counts['grouped_findings']}")
+    print(f"  singleton findings:    {counts['singleton_findings']}")
+    print(f"  asset identities:      {counts['asset_identities']}")
+    print(f"  accounted:             {counts['accounted_findings']}/{report.total_findings}")
+    if args.show:
+        for group in report.finding_groups[: args.limit]:
+            print(f"\n  [{group.confidence}] {group.group_id}  ({group.basis.value})")
+            print(f"    {group.summary}")
+            print(f"    members: {', '.join(group.member_finding_ids)}")
+            print(f"    why: {group.rationale}")
+    print(f"\n  written: {path}")
+    if not report.totals_balance:
+        print("ERROR: correlation did not account for every finding.")
+        return 1
+    print("OK: grouped + singletons = all findings. Nothing was merged or removed;")
+    print("    groups are links over the findings, which remain independent records.")
+    return 0
+
+
+def cmd_identities(args: argparse.Namespace) -> int:
+    from vapt_verify.correlation import CorrelationEngine
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    identities = CorrelationEngine().correlate_assets(ws.load_assets())
+    if not identities:
+        print("No candidate asset identities (no asset records share an IP, FQDN or MAC).")
+        return 0
+    print(f"{len(identities)} candidate asset identit(ies) - NOT merged, review required:")
+    for identity in identities:
+        print(f"\n  [{identity.confidence}] {identity.identity_id} ({identity.basis.value})")
+        print(f"    assets:    {', '.join(identity.member_asset_ids)}")
+        print(f"    ips:       {', '.join(identity.ip_addresses) or '(none)'}")
+        print(f"    hostnames: {', '.join(identity.hostnames) or '(none)'}")
+        for note in identity.notes:
+            print(f"    note: {note}")
+    return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from vapt_verify.correlation import ChangeKind, diff_import_sets
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    findings = ws.load_findings()
+    by_import: dict[str, list[dict[str, Any]]] = {}
+    for f in findings:
+        by_import.setdefault(f.get("provenance", {}).get("import_id", ""), []).append(f)
+    imports = list(by_import.keys())
+    if len(imports) < 2:
+        print("Need at least two imports to diff. Import another scan first.")
+        return 2
+
+    baseline_id = args.baseline or imports[0]
+    latest_id = args.latest or imports[-1]
+    if baseline_id not in by_import or latest_id not in by_import:
+        print(f"error: unknown import id. Available: {', '.join(i[:12] for i in imports)}")
+        return 2
+
+    result = diff_import_sets(
+        baseline=by_import[baseline_id], latest=by_import[latest_id],
+        baseline_label=baseline_id, latest_label=latest_id,
+    )
+    payload = result.to_dict()
+    counts = payload["counts"]
+    print(f"Diff: baseline={baseline_id[:12]} ({result.baseline_count}) -> "
+          f"latest={latest_id[:12]} ({result.latest_count})")
+    for kind in ChangeKind:
+        print(f"  {kind.value:<22} {counts[kind.value]}")
+    if counts[ChangeKind.NO_LONGER_REPORTED.value]:
+        print("\n  NOTE: 'no longer reported' findings are RETAINED. This is not evidence of")
+        print("        remediation and not a false positive; a reviewer must assess them.")
+        for entry in result.of_kind(ChangeKind.NO_LONGER_REPORTED)[: args.limit]:
+            print(f"    - {entry.summary} [{entry.baseline_severity}]")
+
+    out = ws.root / "reports" / "diff.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"\n  written: {out}")
+    if not result.totals_balance:
+        print("ERROR: diff did not account for every finding on both sides.")
+        return 1
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -1175,6 +1288,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--contradicting", action="append", default=[])
     p_review.add_argument("--confidence", default="medium")
     p_review.set_defaults(func=cmd_review)
+
+    p_corr = sub.add_parser("correlate", help="link findings across scanners (never merges)")
+    add_base(p_corr)
+    add_engagement(p_corr)
+    p_corr.add_argument("--show", action="store_true", help="print each group")
+    p_corr.add_argument("--limit", type=int, default=20)
+    p_corr.set_defaults(func=cmd_correlate)
+
+    p_ident = sub.add_parser("identities", help="candidate asset identities across sources")
+    add_base(p_ident)
+    add_engagement(p_ident)
+    p_ident.set_defaults(func=cmd_identities)
+
+    p_diff = sub.add_parser("diff", help="diff two import sets")
+    add_base(p_diff)
+    add_engagement(p_diff)
+    p_diff.add_argument("--baseline", default="")
+    p_diff.add_argument("--latest", default="")
+    p_diff.add_argument("--limit", type=int, default=20)
+    p_diff.set_defaults(func=cmd_diff)
 
     p_schema = sub.add_parser("schema", help="show/verify schema version")
     add_base(p_schema)

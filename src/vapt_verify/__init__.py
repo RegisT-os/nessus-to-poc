@@ -9,11 +9,12 @@ Design invariant (see docs/METHODOLOGY.md):
     receive an explicit, reviewable verification disposition. No finding may
     disappear silently.
 
-The v0.1 core implements the lossless-import foundation: safe Nessus XML
-parsing, a full finding model with source provenance, JSONL normalized
-exports and a reconciliation gate that fails closed when findings are lost
-without an explicit disposition.
+The platform spans lossless multi-scanner import (with a fail-closed
+reconciliation gate), explainable classification and planning, dry-run-by-default
+safe execution with hashed evidence, a reviewer-owned decision workflow,
+coverage-first reporting, and — from v2.0 — cross-scanner correlation that links
+findings without ever merging or removing them.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 __all__ = ["__version__"]
