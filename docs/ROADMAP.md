@@ -1,23 +1,43 @@
 # Roadmap
 
-Two horizons:
+## How to read this document
 
-- **Near-term (v0.1 → v1.0)** — fine-grained *slices*. Each slice: inspect →
-  implement only the necessary files → focused tests → full tests → lint →
-  type-check → security check → review diff → commit.
-- **Long-term (v2.0 → v10.0)** — *major-version* themes. Each is a coherent
-  capability step, not a single slice; it expands into its own slice plan when
-  it becomes the active horizon.
+Three horizons:
+
+- **Delivered (v0.1 → v2.2)** — shipped, tested, on the branch. Recorded here so
+  the history of *why* each capability exists is not lost.
+- **Planned majors (v3.0 → v10.0)** — each is a coherent capability step, broken
+  into numbered slices with deliverables, guardrails and acceptance criteria.
+  Slices are sized to be independently reviewable and independently shippable.
+- **Backlog** — known work that is real but not yet scheduled into a version.
+
+Every slice follows the same discipline: inspect current state → implement only
+the necessary files → focused tests → full suite → lint → type-check → security
+check → review the diff → commit. A slice is not done until the full suite,
+`ruff`, `mypy --strict` and `vapt-verify security scan` are all clean.
+
+Each planned version below carries:
+
+| Field | Meaning |
+| --- | --- |
+| **Theme** | The single sentence that justifies the version existing |
+| **Depends on** | What must be true before the work can start |
+| **Slices** | Independently shippable units of work |
+| **Guardrails** | Rules the version must not violate — enforced by tests |
+| **Acceptance** | The measurable condition for calling the version done |
+| **Non-goals** | Explicitly out of scope, to stop scope creep |
+
+---
 
 ## Invariants that hold across every release
 
-These never regress, at any version. New capabilities are rejected if they
-would weaken any of them.
+These never regress, at any version. A capability that would weaken one is
+rejected, not negotiated.
 
 1. **No silent loss.** Every imported finding appears in the inventory with an
    explicit, reviewable disposition. Reconciliation fails closed.
 2. **Provenance is permanent.** Original imports are immutable and hashed;
-   evidence is timestamped and hash-chained; nothing is edited in place.
+   evidence is timestamped and hashed; nothing is edited in place.
 3. **Human owns the verdict.** Tool exit codes, model suggestions and automated
    evidence never assign a verdict. Only an authorised reviewer approves
    `FALSE_POSITIVE_APPROVED` / `RISK_ACCEPTED`.
@@ -29,229 +49,365 @@ would weaken any of them.
 6. **Client data stays private.** Real client data never enters the repository;
    `profiles/private/` and `engagements/` are git-ignored and enforced by the
    safety checker.
+7. **Redaction is presentation-layer, never mutation.** *(added v2.2)* Masking
+   sensitive content in a deliverable must never alter the stored evidence, so a
+   redacted report and an intact, hash-verifiable capture always coexist.
+8. **Installed behaviour is the real behaviour.** *(added v1.1)* Anything that
+   works only from a source checkout is broken. Packaging is part of the
+   product and is tested against a real non-editable install.
+
+## Lessons that shaped this roadmap
+
+Grounded in defects actually found in this codebase, not hypotheticals:
+
+- **A repo-relative data path shipped nothing.** Recipes resolved via
+  `__file__`-walking worked in development and were entirely absent on a normal
+  `pip install`, so every classification crashed. → Invariant 8; every version
+  that adds data files must ship them as package data and prove it.
+- **Assumed tool output formats lie.** The OpenSSL adapter matched full-mode
+  `CONNECTED(` while actually invoking `-brief`, which prints `CONNECTION
+  ESTABLISHED` — so successful captures recorded themselves as failures. →
+  Adapter parsers must be validated against real captured output (v3.4).
+- **Non-ASCII in output is a portability bug.** Em dashes in CLI strings crashed
+  legacy Windows consoles, including on `--help`. → CLI output stays ASCII;
+  enforced by a test.
+- **Secrets arrive in evidence by default.** SNMP communities and CLI passwords
+  land in captures unprompted. → Redaction defaults on for deliverables (v2.2).
 
 ---
 
-# Near-term slices (v0.1 → v1.0)
+# Delivered
 
-**All near-term slices v0.1 → v1.0 are delivered** (115 tests; all 32 mandatory
-regression tests pass; `ruff` + `mypy --strict` clean). v0.9's optional desktop
-view is delivered as the self-contained HTML dashboard in v0.7's reporting.
+## v0.1 → v1.0 — Foundation ✅
 
-## v0.1 — Lossless Import Foundation ✅ (delivered)
+| Version | Delivered |
+| --- | --- |
+| **v0.1** | Lossless Nessus XML import, full finding model with provenance, fail-closed reconciliation gate, JSONL inventory, engagement workspace, client-data safety checker, legacy reconstruction + failure analysis |
+| **v0.2** | Explainable layered classification, declarative recipe library, legacy `VULNERABILITIES` migration, per-finding planning, coverage, `legacy export-nmap` |
+| **v0.3** | Safe adapter framework, dry-run-default execution, scope enforcement, structured + hashed evidence |
+| **v0.4** | Protocol adapters (testssl, sslscan, ssh-audit, dns, snmp, smb, ldap, database) |
+| **v0.5** | Engagement profiles, environment mapping with critical-env safeguard, retest |
+| **v0.6** | Review/decision workflow, role-gated false-positive approval, contradictory-evidence surfacing |
+| **v0.7** | Markdown / JSON / CSV / self-contained HTML reporting |
+| **v0.8** | Nessus CSV, Nmap XML, normalized-JSON importers via one shared normalizer |
+| **v0.9** | Local HTML dashboard (the desktop-usability answer; no cloud) |
+| **v1.0** | Schema versioning, backup/restore with integrity manifest, threat model, release checklist, sample engagement |
 
-- Python package + `pyproject.toml` (py3.12, ruff, mypy, pytest).
-- CLI scaffold (`vapt-verify`): `version`, `doctor`, `init`, `engagement
-  create/show`, `import`, `import status`, `inventory assets/services`,
-  `findings list/show`, `security scan`.
-- Safe, streaming Nessus XML importer (defusedxml).
-- Full finding model with source provenance; port-zero and protocol preserved.
-- Reconciliation gate (fail-closed) + import statistics.
-- JSONL normalized exports + engagement workspace / evidence-bundle layout.
-- Synthetic fixtures + regression tests for every legacy failure mode.
-- Repository client-data safety checker + sanitized example profile.
-- Legacy reconstruction preserved and covered by contrast tests.
+**Acceptance met:** 100% of source report items accounted for; all 32 mandatory
+regression tests from the founding brief pass.
 
-**Acceptance:** 100% of synthetic source report items are accounted for.
+## v1.1 — Cross-Platform Correctness ✅
 
-## v0.2 — Classification and Planning ✅ (delivered)
+*Theme: the tool must work where the operator actually is.*
 
-Finding families, capability model, declarative recipe schema, migration of the
-legacy `VULNERABILITIES` map into versioned recipes, manual fallback, `classify`
-/ `explain` / `coverage` commands, per-finding verification plans, and
-`legacy export-nmap` (with the "incomplete" warning).
+Three independently fatal Windows defects, each root-caused and fixed:
+recipes not shipped as package data (crashed all classification on a normal
+install); non-ASCII CLI output crashing cp1252/cp437 consoles; scan files with
+BOM/UTF-16 encodings or HTML-masquerading-as-XML failing with opaque parser
+errors. Plus friendly top-level errors (`--traceback`), Explorer "Copy as path"
+handling, `python -m vapt_verify`, a diagnostic `doctor`, and `docs/WINDOWS.md`.
 
-## v0.3 — Safe Adapter Foundation ✅ (delivered)
-
-Adapters: nmap, tcp, openssl, http, manual, administrative-evidence,
-credentialed-evidence. Dry-run-by-default execution, scope enforcement
-(allow-list, CIDR/hostname validation), structured + hashed evidence. No
-`shell=True`; argument arrays only.
-
-## v0.4 — Protocol Expansion ✅ (delivered)
-
-testssl, sslscan, ssh-audit, dns, snmp, smb, rdp, smtp, ldap, database planning.
-
-## v0.5 — MBSB Operational Profile ✅ (delivered)
-
-Private profile loader, environment mapping with careful precedence, retest
-workflow, MBSB reporting mappings, scanner-source distinctions, sanitized
-banking example. No real client data committed.
-
-## v0.6 — Review and Evidence Workflow ✅ (delivered)
-
-Evidence attachment, decision workflow, contradictory-evidence handling,
-reviewer approval, false-positive approval control, audit trail.
-
-## v0.7 — Reporting ✅ (delivered)
-
-Markdown / JSON / CSV verification matrix, coverage dashboard, retest report,
-evidence index.
-
-## v0.8 — Additional Scanner Imports ✅ (delivered)
-
-Delivered: Nessus/Tenable CSV, Nmap XML, and normalized-JSON reimport, all
-through one shared normalizer so scanner-specific schemas never contaminate the
-core finding model. OpenVAS/Greenbone, Qualys, Rapid7 and Nuclei importers reuse
-that same normalizer and are scheduled for v2.0 (multi-scanner correlation).
-
-## v0.9 — Desktop Usability ✅ (delivered as a local HTML dashboard)
-
-A self-contained, local-only HTML dashboard (`report --format html`) provides
-the visual view. A richer desktop app remains optional future work. No cloud
-hosting.
-
-## v1.0 — Production Readiness ✅ (delivered)
-
-Stable schemas + migrations, full test suite, secure packaging, docs, sample
-engagement, threat model, backup/restore, evidence integrity, release
-checklist, no known finding-loss path.
-
----
-
-# Long-term major versions (v2.0 → v10.0)
-
-Each major version keeps every invariant above, remains local-first by default,
-and expands into its own slice plan when work begins.
-
-## v2.0 — Multi-Scanner Correlation & Source of Truth ✅ (delivered)
+## v2.0 — Multi-Scanner Correlation ✅
 
 *Theme: one defensible inventory across many scanners.*
 
-Delivered in `vapt_verify/correlation/`:
+Layered cross-scanner correlation (`correlate`), asset identity candidates
+(`identities`), and correlation-aware import-set diffing (`diff`).
 
-- Cross-scanner **correlation** of findings *with provenance*, using layered
-  bases (identical fingerprint → plugin+location → shared CVE+location →
-  normalized title+location), each carrying a confidence and a written
-  rationale. `vapt-verify correlate`.
-- **Asset identity reconciliation** across sources (`identities`), linked by
-  MAC / IP / FQDN with explicit confidence. A shared IP is recorded as a
-  *candidate* — never a merge — because an IP can be reassigned.
-- **Import-set diffing** (`diff`): still / newly / no-longer reported, plus
-  severity changes, matched correlation-aware so it works across scanners.
-- The correlation layer is additive: it references finding ids and never
-  mutates or removes a record, so any group decomposes back to its sources.
+**Guardrails held:** correlation is additive and never mutates a record;
+`grouped + singletons == total findings`; "no longer reported" is a state,
+never a deletion.
 
-Guardrail (enforced by tests): correlation produces *links and candidate
-groups*, never silent de-duplication; `grouped + singletons == total findings`;
-"no longer reported" is a state, never a deletion, and never an automatic
-false positive or remediation claim.
+## v2.1 — PoC Export ✅
 
-Still open for a later slice: production-parity importers for
-OpenVAS/Greenbone, Qualys and Rapid7 (they reuse the shared normalizer added in
-v0.8, so this is importer work, not core work).
+*Theme: close the gap between an evidence file and a pasteable report section.*
+
+One report-ready document per finding pairing scanner claim → exact command →
+captured output → parsed observations → verdict + rationale → evidence hash →
+method limitations. **No evidence exports as an evidence *request*, never a
+proof; an unreviewed capture is labelled, never implied to be a confirmation.**
+
+## v2.2 — Sanitization & Chain of Custody ✅
+
+*Theme: what leaves the organisation must be safe, and what stays must be provable.*
+
+Redaction of SNMP communities, CLI passwords, private keys, bearer/JWT tokens,
+basic-auth URLs, cookies, AWS keys and NTLM hashes — on by default for
+deliverables, presentation-layer only. `evidence verify` re-hashes stored
+captures and fails closed on modification or loss.
+
+---
+
+# Planned
 
 ## v3.0 — Verification Orchestration at Scale
 
-*Theme: safe, repeatable verification pipelines.*
+**Theme:** run many verifications safely, repeatably and unattended — without
+any step ever acquiring the authority to decide a verdict.
 
-- Verification **playbooks**: ordered, conditional adapter pipelines per family.
-- Concurrency scheduler with per-host / per-adapter safety governors, rate
-  limits, testing-window enforcement and operator interrupt.
-- Evidence **chaining** (one adapter's output conditions the next) with full
-  lineage.
-- Adapter **plugin SDK**: third-party adapters with a declared safety
-  classification and capability contract; no arbitrary executable recipes.
-- Deterministic re-run: a playbook + engagement state reproduces the same plan.
+**Depends on:** v0.3 adapters, v0.5 profiles (rate limits, testing windows).
 
-Guardrail: scale changes throughput, not judgement — no pipeline step may
-assign a verdict, and every step is dry-run-previewable.
+### Slices
+
+- **v3.1 — Playbooks.** Declarative, ordered adapter pipelines per verification
+  family, with conditional steps (`if port_open`, `if tls_detected`). Same
+  no-executable-content rule as recipes. New: `playbook list|show|validate`.
+- **v3.2 — Scheduler & safety governors.** Bounded concurrency with per-host,
+  per-adapter and per-engagement limits; token-bucket rate limiting; testing-
+  window enforcement; graceful operator interrupt that never leaves a half-
+  written evidence file. New: `run --plan <playbook> --max-concurrency N`.
+- **v3.3 — Evidence chaining & lineage.** One step's parsed observations
+  condition the next; each evidence record stores its parent, so a chain is
+  reconstructable end to end. Extends `poc export` to render a chain.
+- **v3.4 — Adapter conformance suite.** Golden-output fixtures captured from
+  real tools; every adapter parser is tested against them. Directly prevents the
+  class of bug found in the OpenSSL `-brief` parser.
+- **v3.5 — Adapter plugin SDK.** Third-party adapters declaring capability,
+  safety class and parser contract; loaded from an allow-listed directory.
+  Plugins declare, they do not execute arbitrary recipe content.
+- **v3.6 — Deterministic re-run.** A playbook plus engagement state reproduces
+  an identical *plan* (evidence naturally differs); `run --explain-plan` shows
+  what would execute and why.
+
+**Guardrails:** every step is dry-run-previewable; no pipeline step may assign a
+verdict; a governor breach aborts the run rather than proceeding; concurrency
+never bypasses scope validation; an interrupt leaves the evidence store
+consistent.
+
+**Acceptance:** a 500-finding engagement executes a multi-step playbook within
+declared rate limits, produces a complete evidence chain per finding, and
+`coverage` still totals back to imported findings.
+
+**Non-goals:** distributed execution; any form of exploitation or brute force.
 
 ## v4.0 — Continuous Verification & Vulnerability Lifecycle
 
-*Theme: from point-in-time to continuous assurance.*
+**Theme:** move from point-in-time assessment to continuous assurance, without
+ever erasing history.
 
-- Time-series findings: track a finding across scans (open → verified →
-  remediated → retested → closed → recurred) without erasing history.
-- Drift & recurrence detection; SLA / due-date tracking; ageing analytics.
-- Scheduled re-verification and retest campaigns.
-- Ticketing systems (Jira / ServiceNow) integrated as **evidence and workflow
-  state**, not as the source of truth.
+**Depends on:** v2.0 correlation (to track a finding across scans), v3.0
+scheduling.
 
-Guardrail: a closed or remediated finding retains its full historical record; a
-port closing on retest yields `SERVICE_NOT_CURRENTLY_OBSERVED`, never deletion.
+### Slices
+
+- **v4.1 — Finding timeline.** A durable per-finding history: open → verified →
+  remediated → retested → closed → recurred. Append-only; no state transition
+  deletes a prior one. New: `timeline <finding-id>`.
+- **v4.2 — Drift & recurrence detection.** Identify conditions that return after
+  closure, and assets whose exposure changes between scans.
+- **v4.3 — SLA & ageing.** Due dates from severity + engagement policy; ageing
+  buckets; overdue reporting. Policy lives in the profile, never in core.
+- **v4.4 — Scheduled re-verification.** Recurring retest campaigns over a saved
+  scope, honouring v3.2 governors and testing windows.
+- **v4.5 — Ticketing bridges.** Jira / ServiceNow as **evidence and workflow
+  state**, never the source of truth; two-way link with conflict surfacing.
+
+**Guardrails:** a closed or remediated finding retains its full record; a port
+closing on retest yields `SERVICE_NOT_CURRENTLY_OBSERVED`, never deletion and
+never an automatic remediation claim; ticket state never overwrites a reviewer
+verdict.
+
+**Acceptance:** a finding tracked across five scans exposes a complete,
+gap-free timeline, and recurrence after closure is detected and surfaced.
+
+**Non-goals:** becoming a ticketing system; agent-based continuous scanning.
 
 ## v5.0 — Team Governance, RBAC & Tamper-Evident Audit
 
-*Theme: multi-operator engagements with defensible chain-of-custody.*
+**Theme:** multi-operator engagements with defensible attribution.
 
-- Roles: operator / reviewer / engagement-lead / read-only, with least-privilege
-  defaults.
-- Review queues, four-eyes approval, and signed dispositions.
-- Hash-linked (append-only) audit chain across import, execution, evidence and
-  decision events.
-- Concurrent-edit safety on shared evidence stores; conflict surfacing.
+**Depends on:** v0.6 review workflow, v2.2 integrity.
 
-Guardrail: only reviewers approve false-positive / risk-accepted verdicts;
-signatures and the audit chain make every disposition attributable and
-verifiable.
+### Slices
+
+- **v5.1 — Roles & least privilege.** operator / reviewer / engagement-lead /
+  read-only, enforced at the command boundary.
+- **v5.2 — Review queues & four-eyes.** Work assignment; high-severity or
+  false-positive decisions require a second authorised reviewer.
+- **v5.3 — Signed dispositions.** Cryptographic signing of decisions, so a
+  verdict is attributable to a specific reviewer and detectably unaltered.
+- **v5.4 — Hash-linked audit chain.** Each audit entry commits to its
+  predecessor's digest, making silent history edits detectable. New:
+  `audit verify`.
+- **v5.5 — Concurrent-edit safety.** Optimistic concurrency on shared evidence
+  stores; conflicts surfaced for resolution, never silently last-write-wins.
+
+**Guardrails:** only reviewers approve false-positive / risk-accepted verdicts;
+the audit chain is append-only and verifiable; no role can delete evidence.
+
+**Acceptance:** a tampered audit entry is detected by `audit verify`; a
+false-positive approval by a non-reviewer is rejected with a clear reason.
+
+**Non-goals:** SSO/directory integration (v7.0); a permissions UI.
 
 ## v6.0 — Reporting, Analytics & Compliance Mapping
 
-*Theme: defensible reporting for technical and executive audiences.*
+**Theme:** reporting defensible to technical reviewers, executives and auditors
+from one evidence base.
 
-- Template-driven report engine (per client / per regulator), reusing the
-  defensible-language rules from `METHODOLOGY.md`.
-- Coverage-first dashboards and risk-scoring models (EPSS / CVSS / exploit
-  status as inputs, not verdicts).
-- Compliance mappings (e.g. PCI DSS, ISO 27001, NIST CSF, CIS, and banking
-  regimes such as BNM RMiT / MAS TRM) as evidence overlays.
-- Exportable, self-contained evidence packs with integrity manifests.
+**Depends on:** v0.7 reporting, v2.1 PoC export, v4.1 timelines.
 
-Guardrail: reports state what was confirmed, blocked, not reproduced or requires
-other evidence — never "clean because a tool returned nothing".
+### Slices
+
+- **v6.1 — Template engine.** Per-client / per-regulator report templates,
+  reusing the defensible-language rules from `METHODOLOGY.md`.
+- **v6.2 — Coverage-first dashboards.** Trend, ageing and disposition analytics
+  — coverage always the headline, automation rate never presented as quality.
+- **v6.3 — Risk-scoring inputs.** EPSS / CVSS / KEV / exploit availability as
+  *inputs to a reviewer*, never auto-verdicts.
+- **v6.4 — Compliance overlays.** PCI DSS, ISO 27001, NIST CSF, CIS, and banking
+  regimes (BNM RMiT, MAS TRM) mapped as evidence overlays over findings.
+- **v6.5 — Evidence packs.** Self-contained, integrity-manifested export bundles
+  for handover or audit.
+
+**Guardrails:** every generated statement traces to evidence or is labelled as
+requiring review; prohibited phrasings from `METHODOLOGY.md` are rejected by a
+lint test over templates; compliance mapping never changes a verdict.
+
+**Acceptance:** a report generated from a sample engagement passes the
+report-language lint, and every claim in it resolves to an evidence id.
+
+**Non-goals:** being a GRC platform; automated compliance attestation.
 
 ## v7.0 — Integration Platform & API
 
-*Theme: interoperate with the wider security ecosystem.*
+**Theme:** interoperate with the wider security ecosystem without surrendering
+the source of truth.
 
-- Stable, versioned API (REST/gRPC) and webhooks over the same core models.
-- Connectors: Tenable.sc / Tenable.io / Nessus Manager, SIEM/SOAR, data
-  warehouse export.
-- CI/CD security-gate mode and SBOM ingestion.
-- Threat-intel enrichment (CISA KEV, EPSS, vendor advisories) as *context*.
+**Depends on:** v1.0 stable schemas, v5.1 roles.
 
-Guardrail: the API exposes provenance and disposition on every finding;
-integrations may enrich and route, but may not mutate a verdict.
+### Slices
+
+- **v7.1 — Versioned local API.** REST over the existing models, with the same
+  RBAC; local-bound by default.
+- **v7.2 — Webhooks & events.** Emit import/verification/decision events.
+- **v7.3 — Scanner connectors.** Tenable.sc / Tenable.io / Nessus Manager pull,
+  reusing the v0.8 normalizer.
+- **v7.4 — SIEM / SOAR & warehouse export.** Push findings and verdicts outward.
+- **v7.5 — CI/CD gate mode.** Fail a pipeline on unaccounted or unreviewed
+  high-severity findings; SBOM ingestion.
+- **v7.6 — Threat-intel enrichment.** CISA KEV, EPSS, vendor advisories as
+  context.
+
+**Guardrails:** the API exposes provenance and disposition on every finding;
+integrations may enrich and route but may **not** mutate a verdict; no network
+listener is enabled by default.
+
+**Acceptance:** a full engagement round-trips through the API without loss, and
+an integration attempting to set a verdict is rejected.
+
+**Non-goals:** hosted multi-tenant SaaS; inbound internet exposure.
 
 ## v8.0 — Assisted Analysis (Explainable, Human-in-the-Loop)
 
-*Theme: augment the reviewer; never replace the verdict.*
+**Theme:** augment the reviewer's judgement; never substitute for it.
 
-- Assisted classification, evidence summarization, recipe recommendation and
-  false-positive-pattern surfacing — all as **suggestions** with cited evidence.
-- Offline / local-capable inference option to preserve the local-first and
-  data-privacy posture.
-- Every suggestion is logged with its inputs and confidence and requires
-  explicit reviewer confirmation to affect state.
+**Depends on:** v6.1 templates, v5.3 attribution.
 
-Guardrail: no model output ever sets a disposition or verdict automatically;
-suggestions are advisory, attributable and reversible.
+### Slices
 
-## v9.0 — Enterprise Scale, Resilience & Chain-of-Custody
+- **v8.1 — Assisted classification.** Suggest recipes/families for findings that
+  currently reach only the manual fallback, always with cited evidence.
+- **v8.2 — Evidence summarization.** Condense long captures into review-ready
+  summaries, with the full capture one click away.
+- **v8.3 — False-positive pattern surfacing.** Highlight historical patterns
+  similar to the finding under review — as prior art, not as a conclusion.
+- **v8.4 — Local/offline inference option.** Preserve the local-first posture
+  and keep client data in-boundary.
+- **v8.5 — Suggestion audit.** Every suggestion logged with inputs, model
+  identity, version and confidence; explicit reviewer confirmation required to
+  affect any state.
 
-*Theme: durability at large scale.*
+**Guardrails:** no model output ever sets a disposition or verdict; suggestions
+are advisory, attributable and reversible; a suggestion is visually distinct
+from an evidence-backed statement in every rendering; disabling assistance
+entirely must leave the platform fully functional.
 
-- Performance for very large engagements (millions of findings); streaming and
-  indexed evidence stores.
-- Optional high-availability server mode (still deployable fully on-prem).
-- Encryption at rest, key management, and WORM / immutable evidence archival.
-- Data retention, legal-hold and disaster-recovery policies; verified
-  backup/restore of complete engagements.
+**Acceptance:** with assistance enabled, no state transition occurs without a
+recorded human confirmation; with it disabled, the full suite still passes.
 
-Guardrail: archival and retention are additive to provenance — evidence
-integrity and reconstructability are preserved end-to-end.
+**Non-goals:** autonomous verdict assignment; sending client data to third-party
+inference services by default.
+
+## v9.0 — Enterprise Scale, Resilience & Long-Term Custody
+
+**Theme:** durability at scale, over years.
+
+**Depends on:** v3.2 scheduling, v5.4 audit chain.
+
+### Slices
+
+- **v9.1 — Large-engagement performance.** Millions of findings: streaming
+  reconciliation, indexed evidence stores, bounded memory.
+- **v9.2 — Optional HA server mode.** Still fully on-premises deployable.
+- **v9.3 — Encryption at rest & key management.**
+- **v9.4 — WORM archival.** Immutable long-term evidence storage.
+- **v9.5 — Retention, legal hold & DR.** Verified backup/restore of complete
+  engagements, with policy-driven retention.
+
+**Guardrails:** archival and retention are additive to provenance; evidence
+integrity and reconstructability survive every migration, restore and archive
+transition; performance work never weakens the reconciliation gate.
+
+**Acceptance:** a one-million-finding engagement imports, reconciles and reports
+within documented resource bounds; a restored archive verifies byte-for-byte.
+
+**Non-goals:** cloud-only features; proprietary storage formats.
 
 ## v10.0 — Extensible Standard & Ecosystem
 
-*Theme: a durable, certifiable verification standard.*
+**Theme:** a durable, certifiable verification standard rather than one tool.
 
-- Curated, **signed** recipe/adapter marketplace with a certification program.
-- Long-term schema-stability guarantees with automated migration.
-- Optional multi-tenant managed deployments; full i18n and accessibility.
-- A published **conformance suite** that any deployment can run to prove the
-  no-finding-loss invariant and audit integrity hold end-to-end.
+**Depends on:** everything above; v3.5 plugin SDK; v1.0 schema stability.
 
-Guardrail: the conformance suite is the contract — a build that cannot prove
-"no finding disappeared without an explicit, reviewable disposition" is not a
-conformant v10.0.
+### Slices
+
+- **v10.1 — Conformance suite.** A published, runnable suite any deployment
+  executes to prove the invariants hold end to end.
+- **v10.2 — Signed recipe/adapter marketplace.** Curated, signature-verified
+  distribution with a certification process.
+- **v10.3 — Long-term schema guarantees.** Stability commitments plus automated
+  forward migration.
+- **v10.4 — Optional multi-tenant deployment.** For organisations that need it,
+  never as a requirement.
+- **v10.5 — i18n & accessibility.** Full localisation and accessible reporting.
+
+**Guardrails:** the conformance suite is the contract — a build that cannot
+prove *"no finding disappeared without an explicit, reviewable disposition"* is
+not conformant, regardless of what else it offers.
+
+**Acceptance:** an independent deployment passes the published conformance suite
+unmodified.
+
+**Non-goals:** vendor lock-in; closed extension formats.
+
+---
+
+# Backlog (real, not yet scheduled)
+
+Work that is genuinely needed but has no version assigned. Listed so it is not
+quietly forgotten.
+
+| Item | Notes |
+| --- | --- |
+| OpenVAS/Greenbone, Qualys, Rapid7 importers | Reuse the v0.8 shared normalizer; importer work, not core work |
+| Nuclei importer + safe template execution | Requires a template safety classification |
+| Recipe coverage expansion | The built-in library covers common families; long-tail plugins still reach the manual fallback |
+| Per-profile redaction patterns | `Redactor.from_profile` exists; profile wiring and docs do not |
+| Evidence screenshot workflow | `evidence add` accepts files; no capture-and-annotate flow |
+| Correlation tuning telemetry | Measure how often the weakest (title) basis is later rejected by reviewers |
+| Structured manual-test checklists | v0.2 emits manual steps; application-security checklists could be richer |
+| Windows verification-tool bundle | Documented in `WINDOWS.md`; could be scripted |
+
+# Deliberate non-goals (all versions)
+
+Recorded so they are not re-proposed:
+
+- Automatic exploitation, brute force, password spraying, denial of service, or
+  destructive HTTP methods.
+- Cloud-hosted-by-default operation, or any design that requires sending client
+  data off-premises.
+- Automatic false-positive classification, or any path where a tool exit code,
+  closed port or model output assigns a verdict.
+- Silent de-duplication or merging of findings.
+- A "coverage" metric based on automation rate.
