@@ -35,7 +35,9 @@ vapt-verify = "vapt_verify.cli.main:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-vapt_verify = ["py.typed"]
+# Recipes MUST ship with the package: without them, classification fails on any
+# non-editable install (see src/vapt_verify/recipes/library.py).
+vapt_verify = ["py.typed", "recipes/data/*.yaml"]
 
 # ---------------------------------------------------------------------------
 # Tooling configuration

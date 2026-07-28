@@ -13,6 +13,7 @@ executed against a target unless it is explicitly in the engagement scope and
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 import sys
 from pathlib import Path
@@ -23,15 +24,21 @@ from vapt_verify.adapters import get_adapter
 from vapt_verify.adapters.base import AdapterKind, ExecutionContext
 from vapt_verify.classification.classifier import Classifier
 from vapt_verify.classification.models import Capabilities
+from vapt_verify.cli.console import configure_stdio, console_encoding
 from vapt_verify.coverage import compute_coverage
 from vapt_verify.execution.runner import Executor, OutcomeStatus
 from vapt_verify.importers.nessus_xml import NessusImporter
+from vapt_verify.importers.source_file import (
+    SourceFileError,
+    inspect_source_file,
+    normalize_user_path,
+)
 from vapt_verify.models.engagement import Engagement, TestingWindow
 from vapt_verify.models.finding import Finding
 from vapt_verify.models.recipe import Recipe
 from vapt_verify.planning.planner import Planner
 from vapt_verify.recipes.legacy_migration import nmap_scripts_for_name
-from vapt_verify.recipes.library import RecipeLibrary
+from vapt_verify.recipes.library import RecipeLibrary, RecipeLibraryError
 from vapt_verify.reconciliation.gate import ReconciliationStatus, reconcile
 from vapt_verify.security.client_data_check import scan_repository
 from vapt_verify.workspace import EngagementWorkspace
@@ -54,14 +61,40 @@ def cmd_version(_args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
+    """Environment diagnostics. Run this first when something 'doesn't work'."""
+    ok = True
     print(f"vapt-verify {__version__}")
-    print(f"python: {sys.version.split()[0]}")
+    print(f"python:           {sys.version.split()[0]} ({sys.executable})")
+    print(f"platform:         {platform.system()} {platform.release()} ({platform.machine()})")
+    print(f"console encoding: {console_encoding()}")
+
+    # The recipe library is the #1 install-related failure: without it,
+    # classify/plan/run cannot resolve any recipe.
+    print(f"recipe library:   {RecipeLibrary.builtin_location()}")
+    try:
+        library = RecipeLibrary.load_builtin()
+        print(f"                  {len(library)} recipe(s) loaded  [OK]")
+    except Exception as exc:
+        ok = False
+        print(f"                  FAILED: {exc}")
+
     print("optional verification tools (absence never drops findings):")
     for tool in _OPTIONAL_TOOLS:
         location = shutil.which(tool)
-        status = location if location else "not found"
-        print(f"  {tool:<12} {status}")
-    return 0
+        print(f"  {tool:<12} {location if location else 'not found'}")
+
+    scripts_dir = Path(sys.executable).parent
+    if shutil.which("vapt-verify") is None:
+        ok = False
+        print("\nNOTE: 'vapt-verify' is not on PATH. Invoke it explicitly:")
+        if platform.system() == "Windows":
+            print(rf"  {scripts_dir}\vapt-verify.exe doctor")
+            print(f"  (or: {sys.executable} -m vapt_verify.cli.main doctor)")
+        else:
+            print(f"  {scripts_dir}/vapt-verify doctor")
+
+    print("\nRESULT: " + ("environment looks healthy." if ok else "problems found (see above)."))
+    return 0 if ok else 1
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -138,13 +171,19 @@ def cmd_import(args: argparse.Namespace) -> int:
         print("Create it first: vapt-verify engagement create --id <id>")
         return 2
 
-    source = Path(args.scan_file)
-    if not source.exists():
-        print(f"error: scan file not found: {source}")
+    source = normalize_user_path(str(args.scan_file))
+    # Preflight: catch BOM/UTF-16/not-actually-XML files with an actionable
+    # message instead of an opaque XML ParseError traceback.
+    try:
+        info = inspect_source_file(source)
+    except SourceFileError as exc:
+        print(f"error: {exc}")
         return 2
 
     importer = _select_importer(getattr(args, "format", "auto"), source, args.engagement)
     print(f"  importer:              {importer.source_scanner}")
+    if info.has_bom or info.detected_encoding != "utf-8":
+        print(f"  source encoding:       {info.detected_encoding} (handled)")
     result = importer.import_file(source)
     report = reconcile(result, approved_suppressions=args.allow_suppressions)
     record = ws.persist_import(source_path=source, result=result, reconciliation=report)
@@ -506,7 +545,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "evidence_id": outcome.evidence.evidence_id, "operator": args.operator,
         })
         print(f"evidence:  {outcome.evidence.evidence_id} (sha256 {outcome.evidence.sha256[:12]})")
-        print(f"suggested: {outcome.suggested_verdict or '(none — reviewer decides)'}")
+        print(f"suggested: {outcome.suggested_verdict or '(none - reviewer decides)'}")
         print("NOTE: the exit code did not set a verdict; a reviewer must decide.")
     print("finding retained:", outcome.finding_retained)
     return 0
@@ -739,7 +778,7 @@ def cmd_review(args: argparse.Namespace) -> int:
             print(f"CONTRADICTION: {description}")
         decisions = [d for d in ws.load_decisions() if d.get("finding_id") == args.finding]
         for d in decisions:
-            print(f"  decision: {d['verdict']} by {d['reviewer']} — {d['reviewer_rationale']}")
+            print(f"  decision: {d['verdict']} by {d['reviewer']}: {d['reviewer_rationale']}")
         return 0
 
     engine = ReviewEngine()
@@ -956,9 +995,11 @@ def _print_finding(f: dict[str, Any]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vapt-verify",
-        description="VAPT Verification Orchestrator — lossless import & verification planning.",
+        description="VAPT Verification Orchestrator - lossless import and verification planning.",
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
+    parser.add_argument("--traceback", action="store_true",
+                        help="show the full stack trace on unexpected errors")
     sub = parser.add_subparsers(dest="command")
 
     def add_base(p: argparse.ArgumentParser) -> None:
@@ -1161,6 +1202,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Make output encoding-proof before anything can print (Windows cp1252).
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "version", False):
@@ -1169,7 +1212,28 @@ def main(argv: list[str] | None = None) -> int:
     if func is None:
         parser.print_help()
         return 2
-    result: int = func(args)
+
+    show_traceback = bool(getattr(args, "traceback", False))
+    try:
+        result: int = func(args)
+    except KeyboardInterrupt:
+        print("\nInterrupted by operator. No further action was taken.")
+        return 130
+    except SourceFileError as exc:
+        print(f"error: {exc}")
+        return 2
+    except RecipeLibraryError as exc:
+        print(f"error: {exc}")
+        return 2
+    except (OSError, ValueError) as exc:
+        # Operator-facing failure: report it plainly rather than dumping a
+        # traceback, but keep the full detail one flag away.
+        if show_traceback:
+            raise
+        print(f"error: {type(exc).__name__}: {exc}")
+        print("Re-run with --traceback for the full stack trace, "
+              "or run 'vapt-verify doctor' to check the environment.")
+        return 1
     return result
 
 
