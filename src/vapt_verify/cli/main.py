@@ -993,11 +993,15 @@ def cmd_diff(args: argparse.Namespace) -> int:
 
 def cmd_poc_export(args: argparse.Namespace) -> int:
     from vapt_verify.reporting.poc import PocBuilder, poc_index_markdown, poc_json
+    from vapt_verify.security.redaction import Redactor
 
     ws, err = _load_ws(args)
     if ws is None:
         return err
-    builder = PocBuilder(ws)
+    # Redaction is ON by default: these documents are the client-facing
+    # deliverable. --no-redact exports raw and the document says so.
+    redactor = None if args.no_redact else Redactor()
+    builder = PocBuilder(ws, redactor=redactor)
 
     if args.finding:
         finding_ids = [args.finding]
@@ -1043,9 +1047,15 @@ def cmd_poc_export(args: argparse.Namespace) -> int:
 
     with_evidence = sum(1 for d in documents if d.has_evidence)
     reviewed = sum(1 for d in documents if d.is_reviewed)
+    masked = sum(sum(d.redaction_counts.values()) for d in documents)
     print(f"Exported {len(documents)} PoC document(s) to {out_dir}/")
     print(f"  with captured evidence: {with_evidence}")
     print(f"  reviewed (verdict set): {reviewed}")
+    if args.no_redact:
+        print("  sanitization:           NOT APPLIED (--no-redact) - review before sharing")
+    else:
+        print(f"  sanitization:           redaction applied, {masked} item(s) masked")
+        print("                          (evidence files unmodified and still verifiable)")
     if with_evidence < len(documents):
         print(f"  evidence requests:      {len(documents) - with_evidence} "
               "(exported as requests, NOT as proofs)")
@@ -1057,6 +1067,45 @@ def cmd_poc_export(args: argparse.Namespace) -> int:
             print(f"  wrote {written_path}")
         if len(written) > 6:
             print(f"  ... and {len(written) - 6} more")
+    return 0
+
+
+def cmd_evidence_verify(args: argparse.Namespace) -> int:
+    from vapt_verify.security.integrity import IntegrityStatus, verify_evidence
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = ws.load_evidence()
+    if args.finding:
+        rows = [e for e in rows if e.get("finding_id") == args.finding]
+    if not rows:
+        print("No evidence recorded yet.")
+        return 0
+
+    report = verify_evidence(rows)
+    counts = report.to_dict()["counts"]
+    print(f"Verified {len(report.checks)} evidence record(s):")
+    for status in IntegrityStatus:
+        print(f"  {status.value:<14} {counts[status.value]}")
+
+    for check in report.of_status(IntegrityStatus.MODIFIED):
+        print(f"\n  MODIFIED: {check.evidence_id} ({check.adapter}) for {check.finding_id}")
+        print(f"    path:     {check.path}")
+        print(f"    recorded: {check.recorded_sha256}")
+        print(f"    computed: {check.computed_sha256}")
+    for check in report.of_status(IntegrityStatus.MISSING):
+        print(f"\n  MISSING:  {check.evidence_id} -> {check.path}")
+
+    ws.append_audit_event({
+        "event": "evidence_verify", "checked": len(report.checks),
+        "is_intact": report.is_intact,
+    })
+    if not report.is_intact:
+        print("\nFAILED: evidence integrity could not be confirmed. Chain of custody is broken "
+              "for the records listed above; do not rely on them without investigation.")
+        return 1
+    print("\nOK: every stored evidence file matches its recorded SHA-256.")
     return 0
 
 
@@ -1302,6 +1351,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev_add.add_argument("--note", default="")
     p_ev_add.add_argument("--operator", default="unknown")
     p_ev_add.set_defaults(func=cmd_evidence_add)
+    p_ev_verify = ev_sub.add_parser(
+        "verify", help="re-hash stored evidence against recorded SHA-256 (chain of custody)"
+    )
+    add_base(p_ev_verify)
+    add_engagement(p_ev_verify)
+    p_ev_verify.add_argument("--finding", default="", help="limit to one finding")
+    p_ev_verify.set_defaults(func=cmd_evidence_verify)
 
     p_legacy = sub.add_parser("legacy", help="legacy-compatibility commands")
     legacy_sub = p_legacy.add_subparsers(dest="legacy_command", required=True)
@@ -1373,6 +1429,10 @@ def build_parser() -> argparse.ArgumentParser:
                               default="markdown")
     p_poc_export.add_argument("--output", default="", help="output directory")
     p_poc_export.add_argument("--max-output-lines", type=int, default=60)
+    p_poc_export.add_argument(
+        "--no-redact", action="store_true",
+        help="export raw, without masking credentials/keys/tokens (default: redact)",
+    )
     p_poc_export.add_argument("--print", dest="print_doc", action="store_true",
                               help="also print the first document to stdout")
     p_poc_export.set_defaults(func=cmd_poc_export)

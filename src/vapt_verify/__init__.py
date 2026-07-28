@@ -16,5 +16,5 @@ coverage-first reporting, and — from v2.0 — cross-scanner correlation that l
 findings without ever merging or removing them.
 """
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __all__ = ["__version__"]

@@ -18,6 +18,19 @@ disappear?"* with a definitive **no**.
 152 tests; all 32 mandatory regression tests from the brief pass; `ruff` +
 `mypy --strict` clean.
 
+New in v2.2 — **evidence sanitization & integrity**:
+
+- `poc export` now **redacts by default** (SNMP communities, CLI passwords,
+  private keys, bearer/JWT tokens, basic-auth URLs, cookies, AWS keys, NTLM
+  hashes). Crucially, redaction is a **presentation-layer transform**: stored
+  evidence files keep their original bytes, so a redacted client deliverable and
+  an intact, hash-verifiable capture coexist. Every document states whether
+  redaction was applied and how many items were masked; `--no-redact` opts out
+  and says so in the output.
+- `evidence verify` re-hashes every stored capture against its recorded SHA-256
+  and **fails closed** on modification or loss — a chain-of-custody check for
+  report time, handover, or after a restore.
+
 New in v2.1 — **`poc export`**: the Nessus→PoC deliverable. One report-ready
 document per finding pairing the original scanner claim (traceable to its source
 file + hash), the exact command executed, the captured output, parsed

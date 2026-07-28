@@ -103,6 +103,34 @@ class PocDocument:
     limitations: list[str] = field(default_factory=list)
     required_evidence: list[str] = field(default_factory=list)
     engagement_id: str = ""
+    # Sanitization. Redaction is applied to this *document* only; the stored
+    # evidence files keep their original bytes and remain hash-verifiable.
+    redacted: bool = False
+    redaction_counts: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def sanitization_status(self) -> str:
+        if not self.redacted:
+            return "unsanitized"
+        return "redacted" if self.redaction_counts else "redaction_applied_no_matches"
+
+    @property
+    def redaction_note(self) -> str:
+        if not self.redacted:
+            return (
+                "Redaction was NOT applied to this document. Review it for credentials, "
+                "keys, tokens or internal identifiers before sharing externally."
+            )
+        if not self.redaction_counts:
+            return "Redaction was applied; no sensitive patterns matched."
+        total = sum(self.redaction_counts.values())
+        detail = ", ".join(
+            f"{name} x{count}" for name, count in sorted(self.redaction_counts.items())
+        )
+        return (
+            f"Redaction applied: {total} item(s) masked ({detail}). The stored evidence "
+            "files are unmodified and remain verifiable against their recorded SHA-256."
+        )
 
     @property
     def has_evidence(self) -> bool:
@@ -162,6 +190,12 @@ class PocDocument:
                 "limitations": self.limitations,
                 "required_evidence": self.required_evidence,
             },
+            "sanitization": {
+                "status": self.sanitization_status,
+                "redacted": self.redacted,
+                "counts": self.redaction_counts,
+                "note": self.redaction_note,
+            },
         }
 
     # -- renderers ----------------------------------------------------------
@@ -179,6 +213,9 @@ class PocDocument:
         out.append(f"| Target | `{self.target}` ({self.asset_id}) |")
         out.append(f"| Location | {loc} |")
         out.append(f"| Engagement | {self.engagement_id} |")
+        out.append(f"| Sanitization | {self.sanitization_status} |")
+        out.append("")
+        out.append(f"_{self.redaction_note}_")
         out.append("")
 
         out.append("## 1. Original scanner claim")
@@ -334,7 +371,9 @@ class PocDocument:
 <tr><th>Severity</th><td>{esc(self.severity)}</td></tr>
 <tr><th>Target</th><td><code>{esc(self.target)}</code></td></tr>
 <tr><th>Location</th><td>{esc(loc)}</td></tr>
+<tr><th>Sanitization</th><td>{esc(self.sanitization_status)}</td></tr>
 </table>
+<p class="muted">{esc(self.redaction_note)}</p>
 <h2>1. Original scanner claim</h2>
 <p class="muted">{esc(self.scanner)} &middot; plugin {esc(self.plugin_id or 'n/a')} &middot;
  source <code>{esc(self.source_file)}</code> (SHA-256 {esc(self.source_file_hash[:16])}...)</p>
@@ -356,10 +395,17 @@ filtering, credentials, virtual-host/SNI selection, or post-scan remediation.</l
 
 
 class PocBuilder:
-    """Builds :class:`PocDocument` objects from a persisted workspace."""
+    """Builds :class:`PocDocument` objects from a persisted workspace.
 
-    def __init__(self, workspace: Any) -> None:
+    ``redactor`` masks sensitive spans in the *rendered document only*; the
+    stored evidence files are never rewritten, so they stay verifiable against
+    their recorded hashes. Pass ``redactor=None`` to export raw (the document
+    then says explicitly that redaction was not applied).
+    """
+
+    def __init__(self, workspace: Any, redactor: Any | None = None) -> None:
         self.ws = workspace
+        self.redactor = redactor
 
     def build(
         self, finding_id: str, *, max_output_lines: int = DEFAULT_MAX_OUTPUT_LINES
@@ -415,7 +461,40 @@ class PocBuilder:
             document.decision_timestamp = str(latest.get("timestamp", ""))
 
         self._attach_method_context(document, finding)
+        self._apply_redaction(document)
         return document
+
+    def _apply_redaction(self, document: PocDocument) -> None:
+        """Mask sensitive spans in the document. Evidence files are untouched."""
+        if self.redactor is None:
+            document.redacted = False
+            return
+        document.redacted = True
+        counts: dict[str, int] = {}
+
+        def merge(by_rule: dict[str, int]) -> None:
+            for name, count in by_rule.items():
+                counts[name] = counts.get(name, 0) + count
+
+        claim = self.redactor.redact(document.plugin_output)
+        document.plugin_output = claim.text
+        merge(claim.by_rule)
+
+        for block in document.evidence:
+            output = self.redactor.redact(block.output)
+            block.output = output.text
+            merge(output.by_rule)
+            command = self.redactor.redact(block.command)
+            block.command = command.text
+            merge(command.by_rule)
+            block.observations, obs = self.redactor.redact_mapping(block.observations)
+            merge(obs.by_rule)
+
+        rationale = self.redactor.redact(document.reviewer_rationale)
+        document.reviewer_rationale = rationale.text
+        merge(rationale.by_rule)
+
+        document.redaction_counts = counts
 
     def _evidence_block(self, e: dict[str, Any], max_lines: int) -> PocEvidenceBlock:
         combined = (e.get("stdout") or "") + (
