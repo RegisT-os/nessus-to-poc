@@ -991,6 +991,75 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_poc_export(args: argparse.Namespace) -> int:
+    from vapt_verify.reporting.poc import PocBuilder, poc_index_markdown, poc_json
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    builder = PocBuilder(ws)
+
+    if args.finding:
+        finding_ids = [args.finding]
+    else:
+        rows = ws.load_findings()
+        if args.with_evidence_only:
+            with_ev = {e.get("finding_id") for e in ws.load_evidence()}
+            rows = [r for r in rows if r["finding_id"] in with_ev]
+        finding_ids = [r["finding_id"] for r in rows]
+    if not finding_ids:
+        print("No matching findings. (Use --all, or capture evidence first with 'run'.)")
+        return 2
+
+    out_dir = Path(args.output) if args.output else (ws.root / "reports" / "poc")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    documents = []
+    written: list[str] = []
+    for finding_id in finding_ids:
+        document = builder.build(finding_id, max_output_lines=args.max_output_lines)
+        if document is None:
+            print(f"warning: finding {finding_id} not found; skipped")
+            continue
+        documents.append(document)
+        stem = finding_id.replace("find-", "poc-")
+        if args.format in {"markdown", "all"}:
+            path = out_dir / f"{stem}.md"
+            path.write_text(document.to_markdown(), encoding="utf-8")
+            written.append(str(path))
+        if args.format in {"html", "all"}:
+            path = out_dir / f"{stem}.html"
+            path.write_text(document.to_html(), encoding="utf-8")
+            written.append(str(path))
+
+    if args.format in {"json", "all"} and documents:
+        path = out_dir / "poc.json"
+        path.write_text(poc_json(documents), encoding="utf-8")
+        written.append(str(path))
+    if len(documents) > 1 and args.format in {"markdown", "all"}:
+        path = out_dir / "index.md"
+        path.write_text(poc_index_markdown(documents), encoding="utf-8")
+        written.append(str(path))
+
+    with_evidence = sum(1 for d in documents if d.has_evidence)
+    reviewed = sum(1 for d in documents if d.is_reviewed)
+    print(f"Exported {len(documents)} PoC document(s) to {out_dir}/")
+    print(f"  with captured evidence: {with_evidence}")
+    print(f"  reviewed (verdict set): {reviewed}")
+    if with_evidence < len(documents):
+        print(f"  evidence requests:      {len(documents) - with_evidence} "
+              "(exported as requests, NOT as proofs)")
+    if args.print_doc and documents:
+        print("\n" + "=" * 70)
+        print(documents[0].to_markdown())
+    elif written:
+        for written_path in written[:6]:
+            print(f"  wrote {written_path}")
+        if len(written) > 6:
+            print(f"  ... and {len(written) - 6} more")
+    return 0
+
+
 def cmd_security_scan(args: argparse.Namespace) -> int:
     violations = scan_repository(args.root)
     if not violations:
@@ -1288,6 +1357,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--contradicting", action="append", default=[])
     p_review.add_argument("--confidence", default="medium")
     p_review.set_defaults(func=cmd_review)
+
+    p_poc = sub.add_parser("poc", help="export report-ready PoC documents")
+    poc_sub = p_poc.add_subparsers(dest="poc_command", required=True)
+    p_poc_export = poc_sub.add_parser(
+        "export", help="assemble scanner claim + command + capture + verdict per finding"
+    )
+    add_base(p_poc_export)
+    add_engagement(p_poc_export)
+    p_poc_export.add_argument("--finding", default="", help="a single finding id")
+    p_poc_export.add_argument("--all", action="store_true", help="every finding (default)")
+    p_poc_export.add_argument("--with-evidence-only", action="store_true",
+                              help="skip findings that have no captured evidence")
+    p_poc_export.add_argument("--format", choices=["markdown", "html", "json", "all"],
+                              default="markdown")
+    p_poc_export.add_argument("--output", default="", help="output directory")
+    p_poc_export.add_argument("--max-output-lines", type=int, default=60)
+    p_poc_export.add_argument("--print", dest="print_doc", action="store_true",
+                              help="also print the first document to stdout")
+    p_poc_export.set_defaults(func=cmd_poc_export)
 
     p_corr = sub.add_parser("correlate", help="link findings across scanners (never merges)")
     add_base(p_corr)

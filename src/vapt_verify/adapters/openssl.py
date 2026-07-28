@@ -48,7 +48,9 @@ class OpensslAdapter(Adapter):
         observations = {
             "connected": connected,
             "verify_return_code": _extract(text, "Verify return code:"),
-            "verify_error": _extract(text, "Verification error:") or _extract(text, "verify error:"),
+            "verify_error": (
+                _extract(text, "Verification error:") or _extract(text, "verify error:")
+            ),
             "peer_certificate": _extract(text, "Peer certificate:"),
             "protocol": _extract(text, "Protocol"),
             "cipher": _extract(text, "Cipher"),

@@ -18,6 +18,15 @@ disappear?"* with a definitive **no**.
 152 tests; all 32 mandatory regression tests from the brief pass; `ruff` +
 `mypy --strict` clean.
 
+New in v2.1 — **`poc export`**: the Nessus→PoC deliverable. One report-ready
+document per finding pairing the original scanner claim (traceable to its source
+file + hash), the exact command executed, the captured output, parsed
+observations, the reviewer's verdict and rationale, the evidence SHA-256, and
+the limitations of the method used. Two guardrails are enforced in the output: a
+finding with **no evidence exports as an evidence request, never a proof**, and a
+capture with **no verdict is labelled "CAPTURED, NOT REVIEWED"** rather than
+reading as a confirmation.
+
 New in v2.0:
 
 - **Cross-scanner correlation** (`correlate`) — links findings that describe the
@@ -81,6 +90,11 @@ vapt-verify inventory assets   --engagement demo1
 vapt-verify inventory services --engagement demo1
 vapt-verify findings list      --engagement demo1
 vapt-verify findings show <finding-id> --engagement demo1
+
+# Export report-ready PoC documents (scanner claim -> command -> capture ->
+# verdict -> evidence hash -> method limitations)
+vapt-verify poc export --engagement demo1 --finding <finding-id> --print
+vapt-verify poc export --engagement demo1 --format all
 
 # Correlate across scanners, inspect asset identities, diff two imports
 vapt-verify correlate  --engagement demo1 --show
