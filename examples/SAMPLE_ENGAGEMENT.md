@@ -37,6 +37,13 @@ vapt-verify review --engagement demo <finding-id> \
 # 9. Reports (coverage-first) and a self-contained HTML dashboard
 vapt-verify report --engagement demo --format all
 
+# 9b. Report-ready PoC documents: scanner claim -> command -> captured output
+#     -> verdict -> reviewer rationale -> evidence hash -> method limitations.
+#     Findings with no evidence export as evidence REQUESTS, never as proofs.
+vapt-verify poc export --engagement demo --finding <finding-id> --print
+vapt-verify poc export --engagement demo --format all          # every finding
+vapt-verify poc export --engagement demo --with-evidence-only  # captures only
+
 # 10. Back up the engagement (integrity manifest embedded) and verify schema
 vapt-verify backup --engagement demo
 vapt-verify schema --engagement demo

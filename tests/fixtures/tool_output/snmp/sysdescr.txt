@@ -1,0 +1,5 @@
+# PROVENANCE: AUTHORED from vendor documentation/manpage output shapes.
+# The tool was NOT available in the build environment, so this fixture encodes
+# an ASSUMPTION about the format. Replace with a real capture when possible.
+# See tests/conformance_cases.py (Provenance.AUTHORED).
+SNMPv2-MIB::sysDescr.0 = STRING: Linux gateway01 5.15.0-91-generic #101-Ubuntu SMP x86_64

@@ -38,12 +38,24 @@ class OpensslAdapter(Adapter):
 
             return ParsedResult({"timed_out": True}, Verdict.INCONCLUSIVE, "openssl timed out")
         text = raw.stdout + "\n" + raw.stderr
+        # `-brief` prints "CONNECTION ESTABLISHED"; full mode prints "CONNECTED(...)".
+        # Match both, or a connection is reported as failed when it plainly succeeded.
+        connected = (
+            "CONNECTION ESTABLISHED" in text
+            or "CONNECTED(" in text
+            or "SSL handshake" in text
+        )
         observations = {
-            "connected": "CONNECTED" in text,
+            "connected": connected,
             "verify_return_code": _extract(text, "Verify return code:"),
+            "verify_error": (
+                _extract(text, "Verification error:") or _extract(text, "verify error:")
+            ),
+            "peer_certificate": _extract(text, "Peer certificate:"),
             "protocol": _extract(text, "Protocol"),
             "cipher": _extract(text, "Cipher"),
-            "handshake_captured": "CONNECTED" in text or "SSL handshake" in text,
+            "self_signed_indicated": "self-signed certificate" in text.lower(),
+            "handshake_captured": connected,
         }
         return ParsedResult(
             observations,

@@ -42,6 +42,32 @@ by the legacy script) is never used for untrusted input.
 - v0.3+ evidence adds per-evidence SHA-256 hashes, sanitization status and
   immutable execution audit.
 
+## Evidence sanitization (v2.2)
+
+Captured tool output routinely contains material that must not reach a client
+report: SNMP community strings, credentials on a command line, private keys,
+bearer/JWT tokens, session cookies, basic-auth URLs, AWS keys, NTLM hashes.
+
+`vapt-verify poc export` **redacts by default**. The critical property:
+
+> Redaction is a **presentation-layer transform, never a mutation of evidence.**
+
+The stored evidence file keeps its original bytes and its recorded SHA-256, so a
+redacted deliverable and an intact, verifiable capture coexist. Every exported
+document records its `sanitization_status` and how many items were masked;
+`--no-redact` exports raw and the document states that redaction was not applied.
+
+Engagement profiles can add patterns; a malformed custom pattern is skipped
+rather than disabling redaction.
+
+## Evidence integrity / chain of custody (v2.2)
+
+`vapt-verify evidence verify` re-reads every stored capture and re-computes its
+SHA-256 against the recorded digest, reporting `verified` / `modified` /
+`missing` / `not_recorded`. It **fails closed** (exit 1) on modification or
+loss, so a broken chain of custody cannot pass silently. Run it before report
+handover and after any restore.
+
 ## Credentials
 
 - Engagement config stores **credential references only** (e.g.

@@ -13,6 +13,7 @@ executed against a target unless it is explicitly in the engagement scope and
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 import sys
 from pathlib import Path
@@ -23,15 +24,21 @@ from vapt_verify.adapters import get_adapter
 from vapt_verify.adapters.base import AdapterKind, ExecutionContext
 from vapt_verify.classification.classifier import Classifier
 from vapt_verify.classification.models import Capabilities
+from vapt_verify.cli.console import configure_stdio, console_encoding
 from vapt_verify.coverage import compute_coverage
 from vapt_verify.execution.runner import Executor, OutcomeStatus
 from vapt_verify.importers.nessus_xml import NessusImporter
+from vapt_verify.importers.source_file import (
+    SourceFileError,
+    inspect_source_file,
+    normalize_user_path,
+)
 from vapt_verify.models.engagement import Engagement, TestingWindow
 from vapt_verify.models.finding import Finding
 from vapt_verify.models.recipe import Recipe
 from vapt_verify.planning.planner import Planner
 from vapt_verify.recipes.legacy_migration import nmap_scripts_for_name
-from vapt_verify.recipes.library import RecipeLibrary
+from vapt_verify.recipes.library import RecipeLibrary, RecipeLibraryError
 from vapt_verify.reconciliation.gate import ReconciliationStatus, reconcile
 from vapt_verify.security.client_data_check import scan_repository
 from vapt_verify.workspace import EngagementWorkspace
@@ -54,14 +61,42 @@ def cmd_version(_args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(_args: argparse.Namespace) -> int:
+    """Environment diagnostics. Run this first when something 'doesn't work'."""
+    ok = True
     print(f"vapt-verify {__version__}")
-    print(f"python: {sys.version.split()[0]}")
+    print(f"python:           {sys.version.split()[0]} ({sys.executable})")
+    print(f"platform:         {platform.system()} {platform.release()} ({platform.machine()})")
+    print(f"console encoding: {console_encoding()}")
+
+    # The recipe library is the #1 install-related failure: without it,
+    # classify/plan/run cannot resolve any recipe.
+    print(f"recipe library:   {RecipeLibrary.builtin_location()}")
+    try:
+        library = RecipeLibrary.load_builtin()
+        print(f"                  {len(library)} recipe(s) loaded  [OK]")
+    except Exception as exc:
+        ok = False
+        print(f"                  FAILED: {exc}")
+
     print("optional verification tools (absence never drops findings):")
     for tool in _OPTIONAL_TOOLS:
         location = shutil.which(tool)
-        status = location if location else "not found"
-        print(f"  {tool:<12} {status}")
-    return 0
+        print(f"  {tool:<12} {location if location else 'not found'}")
+
+    # PATH is advisory, not a failure: an unactivated virtualenv is a normal,
+    # working setup. Only genuinely broken state (above) sets ok=False.
+    scripts_dir = Path(sys.executable).parent
+    if shutil.which("vapt-verify") is None:
+        on_disk = scripts_dir / ("vapt-verify.exe" if platform.system() == "Windows"
+                                 else "vapt-verify")
+        print("\nNOTE: 'vapt-verify' is not on PATH (normal if the venv is not activated).")
+        if on_disk.exists():
+            print(f"      The command is installed at: {on_disk}")
+        print("      Invoke it either way with:")
+        print(f"        {sys.executable} -m vapt_verify doctor")
+
+    print("\nRESULT: " + ("environment looks healthy." if ok else "problems found (see above)."))
+    return 0 if ok else 1
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -138,13 +173,19 @@ def cmd_import(args: argparse.Namespace) -> int:
         print("Create it first: vapt-verify engagement create --id <id>")
         return 2
 
-    source = Path(args.scan_file)
-    if not source.exists():
-        print(f"error: scan file not found: {source}")
+    source = normalize_user_path(str(args.scan_file))
+    # Preflight: catch BOM/UTF-16/not-actually-XML files with an actionable
+    # message instead of an opaque XML ParseError traceback.
+    try:
+        info = inspect_source_file(source)
+    except SourceFileError as exc:
+        print(f"error: {exc}")
         return 2
 
     importer = _select_importer(getattr(args, "format", "auto"), source, args.engagement)
     print(f"  importer:              {importer.source_scanner}")
+    if info.has_bom or info.detected_encoding != "utf-8":
+        print(f"  source encoding:       {info.detected_encoding} (handled)")
     result = importer.import_file(source)
     report = reconcile(result, approved_suppressions=args.allow_suppressions)
     record = ws.persist_import(source_path=source, result=result, reconciliation=report)
@@ -506,7 +547,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             "evidence_id": outcome.evidence.evidence_id, "operator": args.operator,
         })
         print(f"evidence:  {outcome.evidence.evidence_id} (sha256 {outcome.evidence.sha256[:12]})")
-        print(f"suggested: {outcome.suggested_verdict or '(none — reviewer decides)'}")
+        print(f"suggested: {outcome.suggested_verdict or '(none - reviewer decides)'}")
         print("NOTE: the exit code did not set a verdict; a reviewer must decide.")
     print("finding retained:", outcome.finding_retained)
     return 0
@@ -739,7 +780,7 @@ def cmd_review(args: argparse.Namespace) -> int:
             print(f"CONTRADICTION: {description}")
         decisions = [d for d in ws.load_decisions() if d.get("finding_id") == args.finding]
         for d in decisions:
-            print(f"  decision: {d['verdict']} by {d['reviewer']} — {d['reviewer_rationale']}")
+            print(f"  decision: {d['verdict']} by {d['reviewer']}: {d['reviewer_rationale']}")
         return 0
 
     engine = ReviewEngine()
@@ -836,6 +877,235 @@ def cmd_restore(args: argparse.Namespace) -> int:
             print(f"  - {e}")
         return 1
     print("Integrity verified: all files match the backup manifest hashes.")
+    return 0
+
+
+def cmd_correlate(args: argparse.Namespace) -> int:
+    from vapt_verify.correlation import CorrelationEngine
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    findings = ws.load_findings()
+    assets = ws.load_assets()
+    report = CorrelationEngine().correlate(findings=findings, assets=assets)
+    payload = report.to_dict()
+    path = ws.save_correlation(payload)
+    ws.append_audit_event({
+        "event": "correlate",
+        "finding_groups": len(report.finding_groups),
+        "cross_scanner_groups": len(report.cross_scanner_groups),
+    })
+
+    counts = payload["counts"]
+    print(f"Correlated {report.total_findings} finding(s) across "
+          f"{len(report.scanners)} scanner(s): {', '.join(report.scanners) or '(none)'}")
+    print(f"  finding groups:        {counts['finding_groups']}")
+    print(f"  cross-scanner groups:  {counts['cross_scanner_groups']}")
+    print(f"  grouped findings:      {counts['grouped_findings']}")
+    print(f"  singleton findings:    {counts['singleton_findings']}")
+    print(f"  asset identities:      {counts['asset_identities']}")
+    print(f"  accounted:             {counts['accounted_findings']}/{report.total_findings}")
+    if args.show:
+        for group in report.finding_groups[: args.limit]:
+            print(f"\n  [{group.confidence}] {group.group_id}  ({group.basis.value})")
+            print(f"    {group.summary}")
+            print(f"    members: {', '.join(group.member_finding_ids)}")
+            print(f"    why: {group.rationale}")
+    print(f"\n  written: {path}")
+    if not report.totals_balance:
+        print("ERROR: correlation did not account for every finding.")
+        return 1
+    print("OK: grouped + singletons = all findings. Nothing was merged or removed;")
+    print("    groups are links over the findings, which remain independent records.")
+    return 0
+
+
+def cmd_identities(args: argparse.Namespace) -> int:
+    from vapt_verify.correlation import CorrelationEngine
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    identities = CorrelationEngine().correlate_assets(ws.load_assets())
+    if not identities:
+        print("No candidate asset identities (no asset records share an IP, FQDN or MAC).")
+        return 0
+    print(f"{len(identities)} candidate asset identit(ies) - NOT merged, review required:")
+    for identity in identities:
+        print(f"\n  [{identity.confidence}] {identity.identity_id} ({identity.basis.value})")
+        print(f"    assets:    {', '.join(identity.member_asset_ids)}")
+        print(f"    ips:       {', '.join(identity.ip_addresses) or '(none)'}")
+        print(f"    hostnames: {', '.join(identity.hostnames) or '(none)'}")
+        for note in identity.notes:
+            print(f"    note: {note}")
+    return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    import json as _json
+
+    from vapt_verify.correlation import ChangeKind, diff_import_sets
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    findings = ws.load_findings()
+    by_import: dict[str, list[dict[str, Any]]] = {}
+    for f in findings:
+        by_import.setdefault(f.get("provenance", {}).get("import_id", ""), []).append(f)
+    imports = list(by_import.keys())
+    if len(imports) < 2:
+        print("Need at least two imports to diff. Import another scan first.")
+        return 2
+
+    baseline_id = args.baseline or imports[0]
+    latest_id = args.latest or imports[-1]
+    if baseline_id not in by_import or latest_id not in by_import:
+        print(f"error: unknown import id. Available: {', '.join(i[:12] for i in imports)}")
+        return 2
+
+    result = diff_import_sets(
+        baseline=by_import[baseline_id], latest=by_import[latest_id],
+        baseline_label=baseline_id, latest_label=latest_id,
+    )
+    payload = result.to_dict()
+    counts = payload["counts"]
+    print(f"Diff: baseline={baseline_id[:12]} ({result.baseline_count}) -> "
+          f"latest={latest_id[:12]} ({result.latest_count})")
+    for kind in ChangeKind:
+        print(f"  {kind.value:<22} {counts[kind.value]}")
+    if counts[ChangeKind.NO_LONGER_REPORTED.value]:
+        print("\n  NOTE: 'no longer reported' findings are RETAINED. This is not evidence of")
+        print("        remediation and not a false positive; a reviewer must assess them.")
+        for entry in result.of_kind(ChangeKind.NO_LONGER_REPORTED)[: args.limit]:
+            print(f"    - {entry.summary} [{entry.baseline_severity}]")
+
+    out = ws.root / "reports" / "diff.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(_json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"\n  written: {out}")
+    if not result.totals_balance:
+        print("ERROR: diff did not account for every finding on both sides.")
+        return 1
+    return 0
+
+
+def cmd_poc_export(args: argparse.Namespace) -> int:
+    from vapt_verify.reporting.poc import PocBuilder, poc_index_markdown, poc_json
+    from vapt_verify.security.redaction import Redactor
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    # Redaction is ON by default: these documents are the client-facing
+    # deliverable. --no-redact exports raw and the document says so.
+    redactor = None if args.no_redact else Redactor()
+    builder = PocBuilder(ws, redactor=redactor)
+
+    if args.finding:
+        finding_ids = [args.finding]
+    else:
+        rows = ws.load_findings()
+        if args.with_evidence_only:
+            with_ev = {e.get("finding_id") for e in ws.load_evidence()}
+            rows = [r for r in rows if r["finding_id"] in with_ev]
+        finding_ids = [r["finding_id"] for r in rows]
+    if not finding_ids:
+        print("No matching findings. (Use --all, or capture evidence first with 'run'.)")
+        return 2
+
+    out_dir = Path(args.output) if args.output else (ws.root / "reports" / "poc")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    documents = []
+    written: list[str] = []
+    for finding_id in finding_ids:
+        document = builder.build(finding_id, max_output_lines=args.max_output_lines)
+        if document is None:
+            print(f"warning: finding {finding_id} not found; skipped")
+            continue
+        documents.append(document)
+        stem = finding_id.replace("find-", "poc-")
+        if args.format in {"markdown", "all"}:
+            path = out_dir / f"{stem}.md"
+            path.write_text(document.to_markdown(), encoding="utf-8")
+            written.append(str(path))
+        if args.format in {"html", "all"}:
+            path = out_dir / f"{stem}.html"
+            path.write_text(document.to_html(), encoding="utf-8")
+            written.append(str(path))
+
+    if args.format in {"json", "all"} and documents:
+        path = out_dir / "poc.json"
+        path.write_text(poc_json(documents), encoding="utf-8")
+        written.append(str(path))
+    if len(documents) > 1 and args.format in {"markdown", "all"}:
+        path = out_dir / "index.md"
+        path.write_text(poc_index_markdown(documents), encoding="utf-8")
+        written.append(str(path))
+
+    with_evidence = sum(1 for d in documents if d.has_evidence)
+    reviewed = sum(1 for d in documents if d.is_reviewed)
+    masked = sum(sum(d.redaction_counts.values()) for d in documents)
+    print(f"Exported {len(documents)} PoC document(s) to {out_dir}/")
+    print(f"  with captured evidence: {with_evidence}")
+    print(f"  reviewed (verdict set): {reviewed}")
+    if args.no_redact:
+        print("  sanitization:           NOT APPLIED (--no-redact) - review before sharing")
+    else:
+        print(f"  sanitization:           redaction applied, {masked} item(s) masked")
+        print("                          (evidence files unmodified and still verifiable)")
+    if with_evidence < len(documents):
+        print(f"  evidence requests:      {len(documents) - with_evidence} "
+              "(exported as requests, NOT as proofs)")
+    if args.print_doc and documents:
+        print("\n" + "=" * 70)
+        print(documents[0].to_markdown())
+    elif written:
+        for written_path in written[:6]:
+            print(f"  wrote {written_path}")
+        if len(written) > 6:
+            print(f"  ... and {len(written) - 6} more")
+    return 0
+
+
+def cmd_evidence_verify(args: argparse.Namespace) -> int:
+    from vapt_verify.security.integrity import IntegrityStatus, verify_evidence
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = ws.load_evidence()
+    if args.finding:
+        rows = [e for e in rows if e.get("finding_id") == args.finding]
+    if not rows:
+        print("No evidence recorded yet.")
+        return 0
+
+    report = verify_evidence(rows)
+    counts = report.to_dict()["counts"]
+    print(f"Verified {len(report.checks)} evidence record(s):")
+    for status in IntegrityStatus:
+        print(f"  {status.value:<14} {counts[status.value]}")
+
+    for check in report.of_status(IntegrityStatus.MODIFIED):
+        print(f"\n  MODIFIED: {check.evidence_id} ({check.adapter}) for {check.finding_id}")
+        print(f"    path:     {check.path}")
+        print(f"    recorded: {check.recorded_sha256}")
+        print(f"    computed: {check.computed_sha256}")
+    for check in report.of_status(IntegrityStatus.MISSING):
+        print(f"\n  MISSING:  {check.evidence_id} -> {check.path}")
+
+    ws.append_audit_event({
+        "event": "evidence_verify", "checked": len(report.checks),
+        "is_intact": report.is_intact,
+    })
+    if not report.is_intact:
+        print("\nFAILED: evidence integrity could not be confirmed. Chain of custody is broken "
+              "for the records listed above; do not rely on them without investigation.")
+        return 1
+    print("\nOK: every stored evidence file matches its recorded SHA-256.")
     return 0
 
 
@@ -956,9 +1226,11 @@ def _print_finding(f: dict[str, Any]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vapt-verify",
-        description="VAPT Verification Orchestrator — lossless import & verification planning.",
+        description="VAPT Verification Orchestrator - lossless import and verification planning.",
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
+    parser.add_argument("--traceback", action="store_true",
+                        help="show the full stack trace on unexpected errors")
     sub = parser.add_subparsers(dest="command")
 
     def add_base(p: argparse.ArgumentParser) -> None:
@@ -1079,6 +1351,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev_add.add_argument("--note", default="")
     p_ev_add.add_argument("--operator", default="unknown")
     p_ev_add.set_defaults(func=cmd_evidence_add)
+    p_ev_verify = ev_sub.add_parser(
+        "verify", help="re-hash stored evidence against recorded SHA-256 (chain of custody)"
+    )
+    add_base(p_ev_verify)
+    add_engagement(p_ev_verify)
+    p_ev_verify.add_argument("--finding", default="", help="limit to one finding")
+    p_ev_verify.set_defaults(func=cmd_evidence_verify)
 
     p_legacy = sub.add_parser("legacy", help="legacy-compatibility commands")
     legacy_sub = p_legacy.add_subparsers(dest="legacy_command", required=True)
@@ -1135,6 +1414,49 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--confidence", default="medium")
     p_review.set_defaults(func=cmd_review)
 
+    p_poc = sub.add_parser("poc", help="export report-ready PoC documents")
+    poc_sub = p_poc.add_subparsers(dest="poc_command", required=True)
+    p_poc_export = poc_sub.add_parser(
+        "export", help="assemble scanner claim + command + capture + verdict per finding"
+    )
+    add_base(p_poc_export)
+    add_engagement(p_poc_export)
+    p_poc_export.add_argument("--finding", default="", help="a single finding id")
+    p_poc_export.add_argument("--all", action="store_true", help="every finding (default)")
+    p_poc_export.add_argument("--with-evidence-only", action="store_true",
+                              help="skip findings that have no captured evidence")
+    p_poc_export.add_argument("--format", choices=["markdown", "html", "json", "all"],
+                              default="markdown")
+    p_poc_export.add_argument("--output", default="", help="output directory")
+    p_poc_export.add_argument("--max-output-lines", type=int, default=60)
+    p_poc_export.add_argument(
+        "--no-redact", action="store_true",
+        help="export raw, without masking credentials/keys/tokens (default: redact)",
+    )
+    p_poc_export.add_argument("--print", dest="print_doc", action="store_true",
+                              help="also print the first document to stdout")
+    p_poc_export.set_defaults(func=cmd_poc_export)
+
+    p_corr = sub.add_parser("correlate", help="link findings across scanners (never merges)")
+    add_base(p_corr)
+    add_engagement(p_corr)
+    p_corr.add_argument("--show", action="store_true", help="print each group")
+    p_corr.add_argument("--limit", type=int, default=20)
+    p_corr.set_defaults(func=cmd_correlate)
+
+    p_ident = sub.add_parser("identities", help="candidate asset identities across sources")
+    add_base(p_ident)
+    add_engagement(p_ident)
+    p_ident.set_defaults(func=cmd_identities)
+
+    p_diff = sub.add_parser("diff", help="diff two import sets")
+    add_base(p_diff)
+    add_engagement(p_diff)
+    p_diff.add_argument("--baseline", default="")
+    p_diff.add_argument("--latest", default="")
+    p_diff.add_argument("--limit", type=int, default=20)
+    p_diff.set_defaults(func=cmd_diff)
+
     p_schema = sub.add_parser("schema", help="show/verify schema version")
     add_base(p_schema)
     p_schema.add_argument("--engagement", default="")
@@ -1161,6 +1483,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Make output encoding-proof before anything can print (Windows cp1252).
+    configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     if getattr(args, "version", False):
@@ -1169,7 +1493,28 @@ def main(argv: list[str] | None = None) -> int:
     if func is None:
         parser.print_help()
         return 2
-    result: int = func(args)
+
+    show_traceback = bool(getattr(args, "traceback", False))
+    try:
+        result: int = func(args)
+    except KeyboardInterrupt:
+        print("\nInterrupted by operator. No further action was taken.")
+        return 130
+    except SourceFileError as exc:
+        print(f"error: {exc}")
+        return 2
+    except RecipeLibraryError as exc:
+        print(f"error: {exc}")
+        return 2
+    except (OSError, ValueError) as exc:
+        # Operator-facing failure: report it plainly rather than dumping a
+        # traceback, but keep the full detail one flag away.
+        if show_traceback:
+            raise
+        print(f"error: {type(exc).__name__}: {exc}")
+        print("Re-run with --traceback for the full stack trace, "
+              "or run 'vapt-verify doctor' to check the environment.")
+        return 1
     return result
 
 

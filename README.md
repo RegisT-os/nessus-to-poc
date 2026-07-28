@@ -14,9 +14,50 @@ disappear?"* with a definitive **no**.
 
 ## Status
 
-**v1.0 — Production ready** (see [`docs/ROADMAP.md`](docs/ROADMAP.md)). The full
-near-term workflow is implemented and tested (115 tests; all 32 mandatory
-regression tests from the brief pass; `ruff` + `mypy --strict` clean):
+**v2.0 — Multi-scanner correlation** (see [`docs/ROADMAP.md`](docs/ROADMAP.md)).
+152 tests; all 32 mandatory regression tests from the brief pass; `ruff` +
+`mypy --strict` clean.
+
+New in v2.2 — **evidence sanitization & integrity**:
+
+- `poc export` now **redacts by default** (SNMP communities, CLI passwords,
+  private keys, bearer/JWT tokens, basic-auth URLs, cookies, AWS keys, NTLM
+  hashes). Crucially, redaction is a **presentation-layer transform**: stored
+  evidence files keep their original bytes, so a redacted client deliverable and
+  an intact, hash-verifiable capture coexist. Every document states whether
+  redaction was applied and how many items were masked; `--no-redact` opts out
+  and says so in the output.
+- `evidence verify` re-hashes every stored capture against its recorded SHA-256
+  and **fails closed** on modification or loss — a chain-of-custody check for
+  report time, handover, or after a restore.
+
+New in v2.1 — **`poc export`**: the Nessus→PoC deliverable. One report-ready
+document per finding pairing the original scanner claim (traceable to its source
+file + hash), the exact command executed, the captured output, parsed
+observations, the reviewer's verdict and rationale, the evidence SHA-256, and
+the limitations of the method used. Two guardrails are enforced in the output: a
+finding with **no evidence exports as an evidence request, never a proof**, and a
+capture with **no verdict is labelled "CAPTURED, NOT REVIEWED"** rather than
+reading as a confirmation.
+
+New in v2.0:
+
+- **Cross-scanner correlation** (`correlate`) — links findings that describe the
+  same condition across Nessus/Nmap/CSV/other sources, with a confidence and a
+  written rationale per group. It **never merges or removes** anything: groups
+  reference finding ids, and `grouped + singletons` always equals the total.
+- **Asset identity candidates** (`identities`) — asset records linked by
+  MAC/IP/FQDN for reviewer confirmation; a shared IP is never treated as proof
+  of a shared asset.
+- **Import-set diff** (`diff`) — still / newly / no-longer reported and severity
+  changes, matched correlation-aware so it works across scanners. "No longer
+  reported" is a **state**, never a deletion, and never an automatic
+  false-positive or remediation claim.
+
+Windows users: see **[`docs/WINDOWS.md`](docs/WINDOWS.md)** — v1.1 fixed three
+install/console defects that made imports fail there.
+
+Already delivered (v0.1 → v1.0):
 
 - Lossless multi-scanner import (Nessus XML/CSV, Nmap XML, normalized JSON) with
   a fail-closed reconciliation gate.
@@ -29,7 +70,7 @@ regression tests from the brief pass; `ruff` + `mypy --strict` clean):
   environment mapping, retest, backup/restore with integrity manifest, and
   schema versioning.
 
-The long-term horizon (v2.0 → v10.0) is mapped in `docs/ROADMAP.md`.
+The long-term horizon (v3.0 → v10.0) is mapped in `docs/ROADMAP.md`.
 
 ## Why (the legacy lesson)
 
@@ -63,12 +104,26 @@ vapt-verify inventory services --engagement demo1
 vapt-verify findings list      --engagement demo1
 vapt-verify findings show <finding-id> --engagement demo1
 
+# Export report-ready PoC documents (scanner claim -> command -> capture ->
+# verdict -> evidence hash -> method limitations)
+vapt-verify poc export --engagement demo1 --finding <finding-id> --print
+vapt-verify poc export --engagement demo1 --format all
+
+# Correlate across scanners, inspect asset identities, diff two imports
+vapt-verify correlate  --engagement demo1 --show
+vapt-verify identities --engagement demo1
+vapt-verify diff       --engagement demo1
+
 # Repository safety (run before every commit)
 vapt-verify security scan --root .
 
-# Environment / tool capability check
+# Environment / tool capability check (run this first if anything misbehaves)
 vapt-verify doctor
 ```
+
+On Windows use `.\.venv\Scripts\vapt-verify.exe ...`, or
+`python -m vapt_verify ...` if `Scripts\` is not on `PATH`. See
+[`docs/WINDOWS.md`](docs/WINDOWS.md).
 
 Engagement data is written under `engagements/<id>/` (git-ignored):
 immutable original imports, `normalized/*.jsonl`, import manifests,

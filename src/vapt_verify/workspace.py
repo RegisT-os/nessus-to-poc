@@ -328,6 +328,23 @@ class EngagementWorkspace:
         return list(read_jsonl(self.decisions_file))
 
     @property
+    def correlation_file(self) -> Path:
+        return self.normalized_dir / "correlation.json"
+
+    def save_correlation(self, report: dict[str, Any]) -> Path:
+        self.normalized_dir.mkdir(parents=True, exist_ok=True)
+        self.correlation_file.write_text(
+            json.dumps(report, indent=2, sort_keys=True), encoding="utf-8"
+        )
+        return self.correlation_file
+
+    def load_correlation(self) -> dict[str, Any]:
+        if not self.correlation_file.exists():
+            return {}
+        data: dict[str, Any] = json.loads(self.correlation_file.read_text(encoding="utf-8"))
+        return data
+
+    @property
     def evidence_index_file(self) -> Path:
         return self.normalized_dir / "evidence.jsonl"
 
