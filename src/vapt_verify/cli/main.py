@@ -252,6 +252,49 @@ def cmd_import_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prepare(args: argparse.Namespace) -> int:
+    """One-command path: Nessus file -> engagement -> Kali validation kit."""
+    root = _workspace_root(args.base, args.engagement)
+    if (root / "engagement.yaml").exists():
+        print(f"error: engagement '{args.engagement}' already exists at {root}")
+        print("Use a new engagement id, or use 'kit build' for the existing engagement.")
+        return 2
+
+    create_args = argparse.Namespace(
+        base=args.base,
+        id=args.engagement,
+        client_alias=args.client_alias,
+        type="",
+        assessment_type="",
+        authorisation_reference=args.authorisation_reference,
+        force=False,
+    )
+    result = cmd_engagement_create(create_args)
+    if result != 0:
+        return result
+
+    import_args = argparse.Namespace(
+        base=args.base,
+        engagement=args.engagement,
+        scan_file=args.scan_file,
+        format="nessus",
+        allow_parse_failures=args.allow_parse_failures,
+        allow_suppressions=0,
+    )
+    result = cmd_import(import_args)
+    if result != 0:
+        print("Kali kit not generated because the Nessus import did not pass reconciliation.")
+        return result
+
+    kit_args = argparse.Namespace(
+        base=args.base,
+        engagement=args.engagement,
+        output=args.output,
+        force=False,
+    )
+    return cmd_kit_build(kit_args)
+
+
 def cmd_inventory_assets(args: argparse.Namespace) -> int:
     ws, err = _load_ws(args)
     if ws is None:
@@ -551,6 +594,50 @@ def cmd_run(args: argparse.Namespace) -> int:
         print("NOTE: the exit code did not set a verdict; a reviewer must decide.")
     print("finding retained:", outcome.finding_retained)
     return 0
+
+
+def cmd_kit_build(args: argparse.Namespace) -> int:
+    from vapt_verify.kit import OnsiteKitBuilder
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    output = Path(args.output) if args.output else (ws.root / "kali-kit")
+    result = OnsiteKitBuilder(ws).build(output, force=args.force)
+    ws.append_audit_event(
+        {
+            "event": "kali_kit_build",
+            "finding_count": result.finding_count,
+            "executable_step_count": result.executable_count,
+            "manual_step_count": result.manual_count,
+            "output": str(result.root),
+        }
+    )
+    print(f"Kali validation kit written to {result.root}/")
+    print(f"  Nessus findings:     {result.finding_count}")
+    print(f"  executable scripts:  {result.executable_count}")
+    print(f"  manual evidence:     {result.manual_count}")
+    print("Next: copy the whole kit to Kali, read commands.md, then run ./run-all.sh")
+    return 0
+
+
+def cmd_kit_import(args: argparse.Namespace) -> int:
+    from vapt_verify.kit import OnsiteEvidenceImporter
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    summary = OnsiteEvidenceImporter(ws).import_kit(
+        normalize_user_path(args.kit_dir), operator_override=args.operator
+    )
+    print(f"Imported Kali evidence captures: {summary.imported}")
+    if summary.skipped_duplicates:
+        print(f"Skipped duplicate captures:      {summary.skipped_duplicates}")
+    for error in summary.errors:
+        print(f"error: {error}")
+    if summary.imported:
+        print("Next: review the findings, then run 'vapt-verify poc export'.")
+    return 1 if summary.errors else 0
 
 
 def cmd_evidence_request(args: argparse.Namespace) -> int:
@@ -1404,7 +1491,9 @@ def _print_finding(f: dict[str, Any]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vapt-verify",
-        description="VAPT Verification Orchestrator - lossless import and verification planning.",
+        description=(
+            "Convert scanner findings into Kali validation scripts and evidence-backed PoCs."
+        ),
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument("--traceback", action="store_true",
@@ -1419,6 +1508,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("version").set_defaults(func=cmd_version)
     sub.add_parser("doctor").set_defaults(func=cmd_doctor)
+
+    p_prepare = sub.add_parser(
+        "prepare", help="turn a Nessus file into a Kali validation kit"
+    )
+    add_base(p_prepare)
+    p_prepare.add_argument("scan_file", help="path to the .nessus file")
+    p_prepare.add_argument("--engagement", required=True, help="new engagement id")
+    p_prepare.add_argument("--client-alias", default="")
+    p_prepare.add_argument("--authorisation-reference", default="")
+    p_prepare.add_argument(
+        "--output", default="", help="kit directory (default: engagement/kali-kit)"
+    )
+    p_prepare.add_argument("--allow-parse-failures", action="store_true")
+    p_prepare.set_defaults(func=cmd_prepare)
 
     p_init = sub.add_parser("init", help="initialize an engagements base directory")
     add_base(p_init)
@@ -1531,6 +1634,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_runbook.add_argument("--timeout", type=int, default=120,
                            help="per-step timeout recorded in the runbook")
     p_runbook.set_defaults(func=cmd_runbook)
+    p_kit = sub.add_parser("kit", help="build a Kali kit or import its returned evidence")
+    kit_sub = p_kit.add_subparsers(dest="kit_command", required=True)
+    p_kit_build = kit_sub.add_parser("build", help="generate Kali Bash validation scripts")
+    add_base(p_kit_build)
+    add_engagement(p_kit_build)
+    p_kit_build.add_argument("--output", default="")
+    p_kit_build.add_argument(
+        "--force", action="store_true", help="refresh generated files; preserve evidence/"
+    )
+    p_kit_build.set_defaults(func=cmd_kit_build)
+    p_kit_import = kit_sub.add_parser(
+        "import", help="verify and import evidence captured on Kali"
+    )
+    add_base(p_kit_import)
+    add_engagement(p_kit_import)
+    p_kit_import.add_argument("kit_dir", help="returned Kali kit directory")
+    p_kit_import.add_argument("--operator", default="", help="override captured operator")
+    p_kit_import.set_defaults(func=cmd_kit_import)
 
     p_ev = sub.add_parser("evidence", help="manage evidence")
     ev_sub = p_ev.add_subparsers(dest="evidence_command", required=True)

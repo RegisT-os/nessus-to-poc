@@ -170,6 +170,67 @@ def test_nmap_command_carries_the_recipe_scripts(scoped_ws: EngagementWorkspace)
     assert "22" in nmap.argv
 
 
+def test_inprocess_tcp_check_becomes_a_netcat_command(tmp_path: Path) -> None:
+    """An in-process step must not tell a remote operator to run it locally.
+
+    The TCP-connect adapter runs inside vapt-verify, but the whole premise of a
+    runbook is that the operator is on a *different* machine. `nc -vz` reports
+    the same thing and, like the adapter, proves exposure and nothing more.
+    """
+    host = report_host(
+        name="192.0.2.30",
+        props=default_host_props("192.0.2.30"),
+        items=[report_item(plugin_id="999001", plugin_name="Unknown Service Exposed",
+                           port=9001, protocol="tcp", severity=1, svc_name="unknown",
+                           family="Service detection")],
+    )
+    path = tmp_path / "exposure.nessus"
+    path.write_text(nessus_document(hosts=[host]), encoding="utf-8")
+    ws = EngagementWorkspace.create(
+        tmp_path / "eng", Engagement(engagement_id="eng-tcp", approved_cidrs=["192.0.2.0/24"])
+    )
+    result = NessusImporter(engagement_id="eng-tcp").import_file(path)
+    ws.persist_import(source_path=path, result=result, reconciliation=reconcile(result))
+
+    runbook = _build(ws)
+    entry = runbook.entries[0]
+    assert entry.recipe_id == "port-service-exposure"
+    nc = next(c for c in entry.commands if c.tool == "nc")
+    assert nc.argv == ["nc", "-vz", "-w", "5", "192.0.2.30", "9001"]
+    assert "reachability only" in nc.description
+    assert "step " in to_shell(runbook)
+
+
+def test_recipe_selection_ignores_the_generating_machine_toolset(
+    scoped_ws: EngagementWorkspace,
+) -> None:
+    """A runbook written on a bare Windows laptop must match one written on Kali.
+
+    Classifying against locally installed tools would downgrade findings to
+    "capability unavailable" purely because the machine holding the scan file
+    has no security tooling -- exactly the machine a runbook exists to serve.
+    """
+    from vapt_verify.classification.models import Capabilities
+
+    bare = RunbookBuilder(capabilities=Capabilities(available=set())).build(
+        engagement=scoped_ws.engagement(),
+        findings=scoped_ws.load_findings(),
+        assets=scoped_ws.load_assets(),
+    )
+    fully_equipped = RunbookBuilder(
+        capabilities=Capabilities(available={"nmap", "openssl", "testssl.sh", "ssh-audit"})
+    ).build(
+        engagement=scoped_ws.engagement(),
+        findings=scoped_ws.load_findings(),
+        assets=scoped_ws.load_assets(),
+    )
+    assert [c.argv for c in bare.commands] == [c.argv for c in fully_equipped.commands]
+    assert [e.recipe_id for e in bare.entries] == [e.recipe_id for e in fully_equipped.entries]
+    # Local availability is still reported -- as advice, not as a filter.
+    assert any(not c.tool_present_locally for c in bare.commands)
+    assert all(c.tool_present_locally for c in fully_equipped.commands if c.tool != "nc")
+
+
 def test_generated_command_matches_what_the_executor_would_run(
     scoped_ws: EngagementWorkspace,
 ) -> None:

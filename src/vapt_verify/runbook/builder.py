@@ -64,9 +64,15 @@ class RunbookBuilder:
         capture_dir: str = "capture",
     ) -> None:
         self.library = library or RecipeLibrary.load_builtin()
-        # Capabilities of the *generating* machine. Advisory only.
+        # Capabilities of the *generating* machine, recorded per command so the
+        # operator knows what is missing here. Advisory only.
         self.capabilities = capabilities if capabilities is not None else Capabilities.detect()
-        self.classifier = Classifier(self.library, self.capabilities)
+        # Recipe selection, however, must NOT depend on them. A runbook written
+        # on a Windows laptop with no security tools installed and run on Kali
+        # must choose the same recipes as one written on Kali; classifying
+        # against the local toolset would silently downgrade findings to
+        # "capability unavailable" on the wrong machine.
+        self.classifier = Classifier(self.library, Capabilities(available=set()))
         self.planner = Planner()
         self.default_timeout = default_timeout
         self.capture_dir = capture_dir
@@ -172,15 +178,33 @@ class RunbookBuilder:
             adapter = get_adapter(step.adapter)
             if adapter is None or adapter.kind is AdapterKind.MANUAL:
                 continue
-            if adapter.kind is AdapterKind.INPROCESS:
-                # In-process checks (a bare TCP connect) have no external command
-                # to hand over; `run` performs them locally instead.
-                entry.notes.append(
-                    f"Step '{step.adapter}' runs inside vapt-verify (no external command); "
-                    f"use: vapt-verify run --finding {finding.finding_id} --approve"
-                )
-                continue
             sequence += 1
+            if adapter.kind is AdapterKind.INPROCESS:
+                # In-process checks (a bare TCP connect) have no binary to hand
+                # over. Telling the operator to "use vapt-verify run" is useless
+                # here -- they are on a different machine, which is the whole
+                # reason for a runbook -- so emit the equivalent netcat probe.
+                command = self._inprocess_equivalent(
+                    finding=finding,
+                    recipe=recipe,
+                    step=step,
+                    target=target,
+                    sequence=sequence,
+                    scope_reason=decision.reason if decision else "no target address available",
+                    in_scope=bool(decision.in_scope) if decision else False,
+                    scope_configured=scope_configured,
+                )
+                if command is None:
+                    sequence -= 1
+                    entry.notes.append(
+                        f"Step '{step.adapter}' has no external-command equivalent for "
+                        f"{finding.transport.value}/{finding.port}; run it with "
+                        f"'vapt-verify run --finding {finding.finding_id} --approve' from a "
+                        "host that can reach the target."
+                    )
+                    continue
+                entry.commands.append(command)
+                continue
             entry.commands.append(
                 self._command(
                     finding=finding,
@@ -288,6 +312,63 @@ class RunbookBuilder:
             stdin_empty=adapter.stdin(ctx) is not None,
             tool_present_locally=self.capabilities.has(adapter.capability),
             params=params,
+            look_for=list(recipe.positive_evidence),
+        )
+
+    def _inprocess_equivalent(
+        self,
+        *,
+        finding: Finding,
+        recipe: Recipe,
+        step: RecipeStep,
+        target: str,
+        sequence: int,
+        scope_reason: str,
+        in_scope: bool,
+        scope_configured: bool,
+    ) -> RunbookCommand | None:
+        """A netcat stand-in for an in-process reachability check.
+
+        ``nc -vz`` reports the same thing the TCP-connect adapter does -- whether
+        the port answers -- and, like it, proves exposure and nothing more. Only
+        TCP has a safe, non-intrusive equivalent; UDP does not, so we return
+        ``None`` rather than emit a probe whose result would be uninterpretable.
+        """
+        if finding.transport.value != "tcp" or finding.port <= 0:
+            return None
+        status = self._status(
+            target=target,
+            port=finding.port,
+            in_scope=in_scope,
+            scope_configured=scope_configured,
+        )
+        argv = (
+            ["nc", "-vz", "-w", "5", target, str(finding.port)]
+            if status is not CommandStatus.UNSAFE_TARGET
+            else []
+        )
+        return RunbookCommand(
+            step_id=f"{finding.finding_id}-{sequence}",
+            finding_id=finding.finding_id,
+            asset_id=finding.asset_id,
+            adapter=step.adapter,
+            tool="nc",
+            description=(
+                f"{step.description} (netcat stand-in for the in-process TCP check; "
+                "reachability only -- it confirms exposure, not the vulnerability)"
+            ).strip(),
+            argv=argv,
+            target=target,
+            port=finding.port,
+            transport=finding.transport.value,
+            output_file=self._output_path(finding, f"{step.adapter}-nc", sequence),
+            status=status,
+            scope_reason=self._scope_reason(status, scope_reason),
+            safety_class=recipe.safety_class.value,
+            optional=step.optional,
+            timeout=self.default_timeout,
+            tool_present_locally=self.capabilities.has("nc"),
+            params=dict(step.params),
             look_for=list(recipe.positive_evidence),
         )
 
