@@ -30,8 +30,10 @@ from vapt_verify.adapters.base import Adapter, AdapterKind, ExecutionContext
 from vapt_verify.classification.classifier import Classifier
 from vapt_verify.classification.models import Capabilities
 from vapt_verify.models.engagement import Engagement
+from vapt_verify.models.enums import Severity
 from vapt_verify.models.finding import Finding
 from vapt_verify.models.recipe import Recipe, RecipeStep
+from vapt_verify.naming import disambiguate, finding_basename, host_dir
 from vapt_verify.planning.planner import Planner
 from vapt_verify.recipes.library import RecipeLibrary
 from vapt_verify.runbook.models import (
@@ -76,6 +78,10 @@ class RunbookBuilder:
         self.planner = Planner()
         self.default_timeout = default_timeout
         self.capture_dir = capture_dir
+        # Populated per build(); capture paths need the whole finding set to be
+        # both readable and collision-free.
+        self._target_cache: dict[str, str] = {}
+        self._finding_dirs: dict[str, str] = {}
 
     # -- entry point --------------------------------------------------------
 
@@ -85,9 +91,34 @@ class RunbookBuilder:
         engagement: Engagement,
         findings: list[dict[str, Any]],
         assets: list[dict[str, Any]] | None = None,
+        include_informational: bool = False,
     ) -> Runbook:
         asset_index = {a["asset_id"]: a for a in (assets or [])}
         enforcer = ScopeEnforcer(engagement)
+
+        # Resolve targets and readable per-finding directory names up front: a
+        # capture path must be readable and unique, and uniqueness can only be
+        # decided by looking at the whole set at once.
+        self._target_cache = {}
+        for row in findings:
+            finding = Finding.from_dict(row)
+            self._target_cache[finding.finding_id] = self._target(
+                row, asset_index.get(finding.asset_id, {}), finding
+            )
+        self._finding_dirs = disambiguate(
+            (
+                row["finding_id"],
+                finding_basename(
+                    severity=Finding.from_dict(row).severity.name,
+                    target="",  # the host is already the parent directory
+                    port=int(row.get("port", 0)),
+                    transport=str(row.get("transport", "")),
+                    title=str(row.get("plugin_name", "")),
+                ),
+                str(row.get("plugin_id", "")),
+            )
+            for row in findings
+        )
         scope_configured = bool(
             engagement.approved_cidrs
             or engagement.approved_targets
@@ -104,7 +135,11 @@ class RunbookBuilder:
         )
         for row in findings:
             runbook.entries.append(
-                self._entry(row, asset_index, enforcer, scope_configured=scope_configured)
+                self._entry(
+                    row, asset_index, enforcer,
+                    scope_configured=scope_configured,
+                    include_informational=include_informational,
+                )
             )
         return runbook
 
@@ -117,6 +152,7 @@ class RunbookBuilder:
         enforcer: ScopeEnforcer,
         *,
         scope_configured: bool,
+        include_informational: bool = False,
     ) -> RunbookEntry:
         finding = Finding.from_dict(row)
         classification = self.classifier.classify(finding)
@@ -144,6 +180,25 @@ class RunbookBuilder:
             refuting_evidence=list(classification.expected_contradictory_evidence),
             limitations=list(classification.known_limitations),
         )
+
+        # Informational findings do not get scanning commands by default. They
+        # report state, not a condition to confirm, so probing them spends the
+        # operator's time on noise. They are still carried in the runbook --
+        # dropping them would break the guarantee that every finding is
+        # accounted for -- just marked as retained rather than probed.
+        if finding.severity is Severity.INFORMATIONAL and not include_informational:
+            entry.retained_only = True
+            entry.objective = (
+                "Retained for context. No active verification is generated for "
+                "informational findings; pass --include-informational to probe them."
+            )
+            entry.notes.append(
+                "Informational: reported for inventory/context, not as a condition to "
+                "confirm. It is retained in the inventory and still requires a "
+                "disposition at review time."
+            )
+            return entry
+
         if recipe is None:
             entry.manual_tasks.append(
                 RunbookManualTask(
@@ -408,10 +463,19 @@ class RunbookBuilder:
     def _output_path(
         self, finding: Finding, adapter: str, sequence: int, extension: str = "txt"
     ) -> str:
-        asset = _safe_component(finding.asset_id, "asset")
-        fid = _safe_component(finding.finding_id, "finding")
+        """A capture path an operator can read without a lookup table.
+
+        ``192.0.2.10/3-MEDIUM_443-tcp_SSL-Certificate-Cannot-Be-Trusted/01_openssl.txt``
+        rather than ``asset-f12da461b6465376/find-37c3608975b2529abc91d78b/...``.
+        Uniqueness still comes from the finding id, appended only when two
+        findings on a host would otherwise share a directory.
+        """
+        host = host_dir(self._target_cache.get(finding.finding_id, finding.asset_id))
+        folder = self._finding_dirs.get(
+            finding.finding_id, _safe_component(finding.finding_id, "finding")
+        )
         name = f"{sequence:02d}_{_safe_component(adapter, 'step')}.{extension}"
-        return f"{asset}/{fid}/{name}"
+        return f"{host}/{folder}/{name}"
 
     def _target(self, row: dict[str, Any], asset: dict[str, Any], finding: Finding) -> str:
         props = row.get("host_properties", {})

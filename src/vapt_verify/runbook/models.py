@@ -196,6 +196,10 @@ class RunbookEntry:
     limitations: list[str] = field(default_factory=list)
     sni_requirements: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    #: Carried for context with no verification generated -- informational
+    #: findings, unless ``--include-informational`` was passed. This is a
+    #: deliberate decision recorded against the finding, not an omission.
+    retained_only: bool = False
 
     @property
     def has_runnable_command(self) -> bool:
@@ -205,11 +209,12 @@ class RunbookEntry:
     def is_accounted_for(self) -> bool:
         """The per-finding half of the no-finding-disappears guarantee.
 
-        An entry is accounted for when it gives the operator *something* to do:
-        a command, or an explicit manual evidence task. An entry with neither
-        would be a silently dropped finding.
+        An entry is accounted for when the runbook says what happens to it: a
+        command, an explicit manual evidence task, or an explicit decision to
+        retain it without verification. An entry with none of those would be a
+        silently dropped finding.
         """
-        return bool(self.commands) or bool(self.manual_tasks)
+        return bool(self.commands) or bool(self.manual_tasks) or self.retained_only
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -235,6 +240,7 @@ class RunbookEntry:
             "limitations": list(self.limitations),
             "sni_requirements": list(self.sni_requirements),
             "notes": list(self.notes),
+            "retained_only": self.retained_only,
             "has_runnable_command": self.has_runnable_command,
             "is_accounted_for": self.is_accounted_for,
         }
@@ -264,6 +270,7 @@ class RunbookEntry:
             limitations=list(data.get("limitations", [])),
             sni_requirements=list(data.get("sni_requirements", [])),
             notes=list(data.get("notes", [])),
+            retained_only=bool(data.get("retained_only", False)),
         )
 
 
@@ -275,6 +282,7 @@ class RunbookCoverage:
     entries: int
     with_runnable_command: int
     manual_only: int
+    retained_only: int = 0
     unaccounted: list[str] = field(default_factory=list)
 
     @property
@@ -283,7 +291,7 @@ class RunbookCoverage:
         return (
             self.entries == self.findings_considered
             and not self.unaccounted
-            and self.with_runnable_command + self.manual_only == self.entries
+            and self.with_runnable_command + self.manual_only + self.retained_only == self.entries
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -292,6 +300,7 @@ class RunbookCoverage:
             "entries": self.entries,
             "with_runnable_command": self.with_runnable_command,
             "manual_only": self.manual_only,
+            "retained_only": self.retained_only,
             "unaccounted": list(self.unaccounted),
             "is_complete": self.is_complete,
         }
@@ -328,12 +337,17 @@ class Runbook:
     def coverage(self, findings_considered: int | None = None) -> RunbookCoverage:
         considered = len(self.entries) if findings_considered is None else findings_considered
         with_cmd = sum(1 for e in self.entries if e.has_runnable_command)
+        retained = sum(
+            1 for e in self.entries
+            if e.retained_only and not e.has_runnable_command and not e.manual_tasks
+        )
         accounted = [e for e in self.entries if e.is_accounted_for]
         return RunbookCoverage(
             findings_considered=considered,
             entries=len(self.entries),
             with_runnable_command=with_cmd,
-            manual_only=len(accounted) - with_cmd,
+            manual_only=len(accounted) - with_cmd - retained,
+            retained_only=retained,
             unaccounted=[e.finding_id for e in self.entries if not e.is_accounted_for],
         )
 

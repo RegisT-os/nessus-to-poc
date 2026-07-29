@@ -131,6 +131,36 @@ If the Nessus file was already imported:
 Use `--force` to refresh generated scripts. Existing files under `evidence/`
 are preserved.
 
+## Informational findings are not scanned
+
+Informational findings report inventory and context, not a condition to
+confirm, so no validation script is generated for them. They are **not
+dropped**: they stay in the engagement, they are listed in `commands.md` under
+"Retained, not scanned", and they still need a disposition at review time.
+
+Add `--include-informational` to `prepare`, `kit build` or `runbook` to
+generate commands for them anyway. `poc export --skip-informational` omits them
+from the exported pack.
+
+## File names
+
+Generated files are named for a human, not for a hash:
+
+```text
+scripts/3-MEDIUM_192.0.2.10_443-tcp_SSL-Certificate-Cannot-Be-Trusted__01_openssl.sh
+reports/poc/2-HIGH_192.0.2.10_host_Ubuntu-Security-Update-for-OpenSSL.md
+```
+
+The leading number is a severity rank, so a directory listing sorts worst-first.
+A host-level finding says `host` rather than `0-tcp`. Names are stable across
+re-exports, so re-running an export updates the same file rather than
+accumulating copies.
+
+The finding id is recorded inside every script and in `manifest.json` — which is
+what import matches on — so readable names cost no traceability.
+`./run-all.sh --finding` accepts a full finding id or any substring of the
+readable name, e.g. `./run-all.sh --finding SSL-Self-Signed`.
+
 ## Important limits
 
 - Generated checks are validation procedures, not automatic exploitation.
@@ -145,6 +175,7 @@ are preserved.
 The normal operator workflow is fully covered above. These documents are only
 needed when changing or auditing the platform itself:
 
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) - the `runbook` / `evidence import` variant of this flow
 - [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) - verdict and evidence rules
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - internal modules and data flow
 - [`docs/SECURITY.md`](docs/SECURITY.md) - client-data and execution safeguards

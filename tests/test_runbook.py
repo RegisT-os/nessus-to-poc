@@ -124,12 +124,70 @@ def test_every_entry_has_a_command_or_an_explicit_manual_task(
     runbook = _build(scoped_ws)
     for entry in runbook.entries:
         assert entry.is_accounted_for, (
-            f"{entry.finding_id} ({entry.plugin_name}) produced neither a command nor a "
-            "manual evidence task, so an operator would have nothing to do with it"
+            f"{entry.finding_id} ({entry.plugin_name}) produced no command, no manual "
+            "evidence task and no explicit retain decision, so an operator would have "
+            "nothing to do with it"
         )
     coverage = runbook.coverage()
     assert coverage.is_complete
-    assert coverage.with_runnable_command + coverage.manual_only == coverage.entries
+    assert (
+        coverage.with_runnable_command + coverage.manual_only + coverage.retained_only
+        == coverage.entries
+    )
+
+
+def test_informational_findings_are_not_scanned_by_default(
+    scoped_ws: EngagementWorkspace,
+) -> None:
+    """Informational findings report state, not a condition to confirm.
+
+    Probing them spends the operator's time on noise. They are still carried --
+    dropping them would break the no-finding-disappears guarantee -- but they
+    get no command.
+    """
+    runbook = _build(scoped_ws)
+    informational = [e for e in runbook.entries if e.severity == "INFORMATIONAL"]
+    assert informational, "fixture no longer contains an informational finding"
+    for entry in informational:
+        assert entry.retained_only
+        assert not entry.commands
+        assert not entry.manual_tasks
+        assert entry.is_accounted_for, "retained is a decision, not an omission"
+
+    # ...and the scripts say so rather than staying silent about them.
+    for text in (to_shell(runbook), to_powershell(runbook)):
+        assert "RETAINED, NOT SCANNED" in text
+        assert informational[0].plugin_name in text
+    assert "Retained, not scanned" in to_markdown(runbook)
+
+
+def test_include_informational_restores_their_commands(
+    scoped_ws: EngagementWorkspace,
+) -> None:
+    runbook = RunbookBuilder().build(
+        engagement=scoped_ws.engagement(),
+        findings=scoped_ws.load_findings(),
+        assets=scoped_ws.load_assets(),
+        include_informational=True,
+    )
+    informational = [e for e in runbook.entries if e.severity == "INFORMATIONAL"]
+    assert informational
+    assert not any(e.retained_only for e in informational)
+    assert any(e.commands or e.manual_tasks for e in informational)
+
+
+def test_capture_paths_are_readable_not_hashes(scoped_ws: EngagementWorkspace) -> None:
+    """`asset-f12da461b6465376/find-37c3608975b2529abc91d78b/` helps nobody."""
+    runbook = _build(scoped_ws)
+    paths = [c.output_file for c in runbook.commands]
+    assert paths
+    for path in paths:
+        host, folder, _name = path.split("/")
+        assert host == "192.0.2.10", host
+        assert folder.split("-")[0] in {"1", "2", "3", "4", "5"}
+        assert "find-" not in path
+        assert "asset-" not in path
+    assert any("SSL-Certificate-Cannot-Be-Trusted" in p for p in paths)
 
 
 def test_local_patch_finding_gets_manual_evidence_not_a_port_scan(

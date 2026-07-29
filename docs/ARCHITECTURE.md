@@ -47,6 +47,7 @@ src/vapt_verify/
 ├── evidence/                # (v0.3) hashed, timestamped evidence manifests
 ├── review/                  # (v0.6) reviewer workflow, false-positive approval
 ├── reporting/               # (v0.7) markdown/json/csv/coverage
+├── naming.py                # human-readable export file/directory names
 ├── security/client_data_check.py   # repository safety checker
 ├── utilities/               # hashing, stable ids/fingerprints, jsonl
 └── workspace.py             # engagement workspace / evidence-bundle layout

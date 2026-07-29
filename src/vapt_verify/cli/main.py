@@ -36,6 +36,7 @@ from vapt_verify.importers.source_file import (
 from vapt_verify.models.engagement import Engagement, TestingWindow
 from vapt_verify.models.finding import Finding
 from vapt_verify.models.recipe import Recipe
+from vapt_verify.naming import disambiguate, finding_basename
 from vapt_verify.planning.planner import Planner
 from vapt_verify.recipes.legacy_migration import nmap_scripts_for_name
 from vapt_verify.recipes.library import RecipeLibrary, RecipeLibraryError
@@ -291,6 +292,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         engagement=args.engagement,
         output=args.output,
         force=False,
+        include_informational=args.include_informational,
     )
     return cmd_kit_build(kit_args)
 
@@ -603,7 +605,9 @@ def cmd_kit_build(args: argparse.Namespace) -> int:
     if ws is None:
         return err
     output = Path(args.output) if args.output else (ws.root / "kali-kit")
-    result = OnsiteKitBuilder(ws).build(output, force=args.force)
+    result = OnsiteKitBuilder(ws).build(
+        output, force=args.force, include_informational=args.include_informational
+    )
     ws.append_audit_event(
         {
             "event": "kali_kit_build",
@@ -737,7 +741,10 @@ def cmd_runbook(args: argparse.Namespace) -> int:
         capture_dir=args.capture_dir,
     )
     runbook = builder.build(
-        engagement=ws.engagement(), findings=rows, assets=ws.load_assets()
+        engagement=ws.engagement(),
+        findings=rows,
+        assets=ws.load_assets(),
+        include_informational=args.include_informational,
     )
 
     out_dir = Path(args.output) if args.output else (ws.root / "runbooks")
@@ -771,6 +778,9 @@ def cmd_runbook(args: argparse.Namespace) -> int:
     print(f"  findings covered:       {coverage.entries} of {len(rows)}")
     print(f"  with runnable commands: {coverage.with_runnable_command}")
     print(f"  manual-only findings:   {coverage.manual_only}")
+    if coverage.retained_only:
+        print(f"  informational retained: {coverage.retained_only} "
+              "(listed, not scanned; --include-informational to probe)")
     print(f"  commands generated:     {len(commands)} "
           f"({len(runnable)} runnable, {len(blocked)} withheld)")
     print(f"  manual evidence tasks:  {len(runbook.manual_tasks)}")
@@ -1275,6 +1285,11 @@ def cmd_poc_export(args: argparse.Namespace) -> int:
         if args.with_evidence_only:
             with_ev = {e.get("finding_id") for e in ws.load_evidence()}
             rows = [r for r in rows if r["finding_id"] in with_ev]
+        if args.skip_informational:
+            rows = [
+                r for r in rows
+                if str(r.get("severity_label", "")).upper() != "INFORMATIONAL"
+            ]
         finding_ids = [r["finding_id"] for r in rows]
     if not finding_ids:
         print("No matching findings. (Use --all, or capture evidence first with 'run'.)")
@@ -1284,14 +1299,30 @@ def cmd_poc_export(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     documents = []
-    written: list[str] = []
     for finding_id in finding_ids:
         document = builder.build(finding_id, max_output_lines=args.max_output_lines)
         if document is None:
             print(f"warning: finding {finding_id} not found; skipped")
             continue
         documents.append(document)
-        stem = finding_id.replace("find-", "poc-")
+
+    # Readable, severity-sorted filenames. A directory of poc-<hash>.md files
+    # cannot be sorted by importance, read at a glance, or handed to a client.
+    names = disambiguate(
+        (
+            d.finding_id,
+            finding_basename(
+                severity=d.severity, target=d.target, port=d.port,
+                transport=d.transport, title=d.title,
+            ),
+            d.plugin_id,
+        )
+        for d in documents
+    )
+
+    written: list[str] = []
+    for document in documents:
+        stem = names[document.finding_id]
         if args.format in {"markdown", "all"}:
             path = out_dir / f"{stem}.md"
             path.write_text(document.to_markdown(), encoding="utf-8")
@@ -1521,6 +1552,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--output", default="", help="kit directory (default: engagement/kali-kit)"
     )
     p_prepare.add_argument("--allow-parse-failures", action="store_true")
+    p_prepare.add_argument(
+        "--include-informational", action="store_true",
+        help="also generate validation scripts for informational findings "
+             "(default: list them, do not scan them)",
+    )
     p_prepare.set_defaults(func=cmd_prepare)
 
     p_init = sub.add_parser("init", help="initialize an engagements base directory")
@@ -1633,6 +1669,11 @@ def build_parser() -> argparse.ArgumentParser:
                            help="directory the generated script writes its output into")
     p_runbook.add_argument("--timeout", type=int, default=120,
                            help="per-step timeout recorded in the runbook")
+    p_runbook.add_argument(
+        "--include-informational", action="store_true",
+        help="also generate scanning commands for informational findings "
+             "(default: list them, do not probe them)",
+    )
     p_runbook.set_defaults(func=cmd_runbook)
     p_kit = sub.add_parser("kit", help="build a Kali kit or import its returned evidence")
     kit_sub = p_kit.add_subparsers(dest="kit_command", required=True)
@@ -1642,6 +1683,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_kit_build.add_argument("--output", default="")
     p_kit_build.add_argument(
         "--force", action="store_true", help="refresh generated files; preserve evidence/"
+    )
+    p_kit_build.add_argument(
+        "--include-informational", action="store_true",
+        help="also generate validation scripts for informational findings "
+             "(default: list them, do not scan them)",
     )
     p_kit_build.set_defaults(func=cmd_kit_build)
     p_kit_import = kit_sub.add_parser(
@@ -1756,6 +1802,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_poc_export.add_argument("--all", action="store_true", help="every finding (default)")
     p_poc_export.add_argument("--with-evidence-only", action="store_true",
                               help="skip findings that have no captured evidence")
+    p_poc_export.add_argument("--skip-informational", action="store_true",
+                              help="omit informational findings from the exported pack")
     p_poc_export.add_argument("--format", choices=["markdown", "html", "json", "all"],
                               default="markdown")
     p_poc_export.add_argument("--output", default="", help="output directory")

@@ -60,15 +60,53 @@ Output summary tells you what you got:
 ```
 Runbook for engagement 'demo1':
   findings covered:       6 of 6
-  with runnable commands: 5
+  with runnable commands: 4
   manual-only findings:   1
-  commands generated:     10 (10 runnable, 0 withheld)
-  manual evidence tasks:  5
+  informational retained: 1 (listed, not scanned; --include-informational to probe)
+  commands generated:     9 (9 runnable, 0 withheld)
+  manual evidence tasks:  4
 ```
 
 `findings covered` always equals the number of findings considered. If any
-finding produced neither a command nor a manual task, `runbook` **exits 1** and
-names it — the same fail-closed posture as the import reconciliation gate.
+finding produced no command, no manual task and no explicit retain decision,
+`runbook` **exits 1** and names it — the same fail-closed posture as the import
+reconciliation gate.
+
+## Informational findings
+
+Informational findings report inventory and context, not a condition to
+confirm, so **no scanning command is generated for them by default**. Probing
+them spends your time at the client site on noise.
+
+They are not dropped. They stay in the inventory, they are listed in the
+generated script and checklist under "Retained, not scanned" with the reason,
+and they still need a disposition at review time. Pass
+`--include-informational` to generate commands for them anyway.
+
+The same rule and flag apply to `kit build` and `prepare`. `poc export` still
+documents them by default; `--skip-informational` omits them from the pack.
+
+## File and directory names
+
+Everything written to disk is named for a human, not for a hash:
+
+```
+capture/192.0.2.10/3-MEDIUM_443-tcp_SSL-Certificate-Cannot-Be-Trusted/01_openssl.txt
+reports/poc/2-HIGH_192.0.2.10_host_Ubuntu-Security-Update-for-OpenSSL.md
+kali-kit/scripts/3-MEDIUM_192.0.2.10_22-tcp_SSH-Weak-Algorithms-Supported__01_ssh_audit.sh
+```
+
+The leading number is a severity rank, so a plain directory listing sorts
+worst-first — alphabetical severity names would file INFORMATIONAL between HIGH
+and LOW. A host-level finding says `host` rather than `0-tcp`, which invites
+being read as a real port. Names are stable across re-exports, so re-running an
+export updates the same file instead of accumulating copies; when two findings
+would collide the plugin id disambiguates them.
+
+The finding id is still recorded *inside* every generated script and in the
+manifest, which is what import matches on, so readable names cost no
+traceability. `run-all.sh --finding` accepts either — a full finding id, or any
+substring of the readable name (`--finding SSL-Self-Signed`).
 
 ## What a generated command looks like
 

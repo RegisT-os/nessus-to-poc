@@ -160,8 +160,11 @@ def to_shell(runbook: Runbook) -> str:
         out.append("echo")
 
     for entry in runbook.entries:
+        if entry.retained_only:
+            continue
         out += _shell_entry(entry)
 
+    out += _retained_comment_block(runbook)
     out += [
         "",
         "echo",
@@ -171,6 +174,32 @@ def to_shell(runbook: Runbook) -> str:
         + " --manifest runbook.json --capture-dir $CAPTURE_DIR\"",
     ]
     return "\n".join(out) + "\n"
+
+
+def _retained_comment_block(runbook: Runbook) -> list[str]:
+    """List informational findings that were carried but not probed.
+
+    They are named rather than silently omitted: an operator reading the script
+    must be able to see that the tool made a decision about them, not that they
+    fell out somewhere.
+    """
+    retained = [e for e in runbook.entries if e.retained_only]
+    if not retained:
+        return []
+    out = [
+        "",
+        "# " + "=" * 74,
+        f"# RETAINED, NOT SCANNED - {len(retained)} informational finding(s)",
+        "#   Reported for inventory/context, not as a condition to confirm. They",
+        "#   remain in the inventory and still need a disposition at review time.",
+        "#   Re-run with --include-informational to generate commands for them.",
+    ]
+    for entry in retained:
+        out.append(
+            f"#   - [{entry.severity}] {entry.target}:{entry.port}/{entry.transport}  "
+            f"{entry.plugin_name}"
+        )
+    return out
 
 
 def _shell_entry(entry: RunbookEntry) -> list[str]:
@@ -285,8 +314,11 @@ def to_powershell(runbook: Runbook) -> str:
         out.append("Write-Host ''")
 
     for entry in runbook.entries:
+        if entry.retained_only:
+            continue
         out += _powershell_entry(entry)
 
+    out += _retained_comment_block(runbook)
     out += [
         "",
         "Write-Host ''",
@@ -347,7 +379,8 @@ def to_markdown(runbook: Runbook) -> str:
         f"- **Generated:** {runbook.generated_at} by vapt-verify {runbook.tool_version}",
         f"- **Findings covered:** {coverage.entries} "
         f"({coverage.with_runnable_command} with commands, "
-        f"{coverage.manual_only} manual-only)",
+        f"{coverage.manual_only} manual-only, "
+        f"{coverage.retained_only} informational retained)",
         f"- **Coverage complete:** {'yes' if coverage.is_complete else 'NO - see below'}",
         "",
         "## Scope",
@@ -380,7 +413,29 @@ def to_markdown(runbook: Runbook) -> str:
         ]
 
     for entry in runbook.entries:
+        if entry.retained_only:
+            continue
         lines += _markdown_entry(entry, runbook.capture_dir)
+
+    retained = [e for e in runbook.entries if e.retained_only]
+    if retained:
+        lines += [
+            f"## Retained, not scanned ({len(retained)} informational)",
+            "",
+            "Reported for inventory and context rather than as a condition to confirm,",
+            "so no verification command is generated. They remain in the inventory and",
+            "still require a disposition at review time. Re-run with",
+            "`--include-informational` to generate commands for them.",
+            "",
+            "| Severity | Target | Finding |",
+            "| --- | --- | --- |",
+        ]
+        for entry in retained:
+            lines.append(
+                f"| {entry.severity} | `{entry.target}:{entry.port}/{entry.transport}` "
+                f"| {entry.plugin_name} |"
+            )
+        lines.append("")
     return "\n".join(lines) + "\n"
 
 

@@ -21,9 +21,11 @@ from vapt_verify.adapters import get_adapter
 from vapt_verify.adapters.base import AdapterKind, ExecutionContext, RawResult
 from vapt_verify.classification.classifier import Classifier
 from vapt_verify.classification.models import Capabilities
+from vapt_verify.models.enums import Severity
 from vapt_verify.models.evidence import Evidence
 from vapt_verify.models.finding import Finding
 from vapt_verify.models.recipe import RecipeStep
+from vapt_verify.naming import finding_basename
 from vapt_verify.recipes.library import RecipeLibrary
 from vapt_verify.utilities.hashing import sha256_file
 from vapt_verify.workspace import EngagementWorkspace
@@ -106,7 +108,13 @@ class OnsiteKitBuilder:
         # Selection must not depend on which tools happen to exist on Windows.
         self.classifier = Classifier(self.library, Capabilities(available=set()))
 
-    def build(self, output_dir: str | Path, *, force: bool = False) -> KitBuildResult:
+    def build(
+        self,
+        output_dir: str | Path,
+        *,
+        force: bool = False,
+        include_informational: bool = False,
+    ) -> KitBuildResult:
         root = Path(output_dir)
         manifest_path = root / "manifest.json"
         if manifest_path.exists() and not force:
@@ -132,8 +140,18 @@ class OnsiteKitBuilder:
 
         assets = {a["asset_id"]: a for a in self.ws.load_assets()}
         findings = [Finding.from_dict(row) for row in self.ws.load_findings()]
+        # Informational findings report state, not a condition to confirm, so no
+        # validation script is generated for them by default. They are still
+        # listed in commands.md and counted here -- carried, not dropped.
+        retained = [
+            f for f in findings
+            if f.severity is Severity.INFORMATIONAL and not include_informational
+        ]
+        retained_ids = {f.finding_id for f in retained}
         steps: list[KitStep] = []
         for finding in findings:
+            if finding.finding_id in retained_ids:
+                continue
             steps.extend(self._steps_for_finding(finding, assets.get(finding.asset_id, {})))
 
         executable = [step for step in steps if step.executable]
@@ -145,16 +163,30 @@ class OnsiteKitBuilder:
             "finding_count": len(findings),
             "executable_step_count": len(executable),
             "manual_step_count": len(manual),
+            "retained_informational_count": len(retained),
+            "retained_informational": [
+                {
+                    "finding_id": f.finding_id,
+                    "plugin_id": f.plugin_id,
+                    "title": f.plugin_name,
+                    "port": f.port,
+                    "transport": f.transport.value,
+                }
+                for f in retained
+            ],
             "steps": [step.to_dict() for step in steps],
         }
 
         _write_lf(root / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        _write_lf(root / "README.md", self._readme(len(findings), len(executable), len(manual)))
-        _write_lf(root / "commands.md", self._commands_markdown(findings, steps))
+        _write_lf(
+            root / "README.md",
+            self._readme(len(findings), len(executable), len(manual), len(retained)),
+        )
+        _write_lf(root / "commands.md", self._commands_markdown(findings, steps, retained))
         _write_lf(root / "lib" / "capture.sh", _capture_library())
         _write_lf(root / "run-all.sh", _run_all_script())
         for step in executable:
-            _write_lf(scripts_dir / f"{step.step_id}.sh", _step_script(step))
+            _write_lf(scripts_dir / script_filename(step), _step_script(step))
 
         return KitBuildResult(
             root=root,
@@ -278,12 +310,22 @@ class OnsiteKitBuilder:
             nmap_role="inappropriate",
         )
 
-    def _readme(self, findings: int, executable: int, manual: int) -> str:
+    def _readme(self, findings: int, executable: int, manual: int, retained: int = 0) -> str:
+        informational = (
+            f"\n{retained} informational finding(s) are listed in `commands.md` under "
+            "\"Retained, not scanned\" with no validation script. They report inventory or\n"
+            "context rather than a condition to confirm. They remain in the engagement and\n"
+            "still need a disposition at review time; rebuild with `--include-informational`\n"
+            "to generate commands for them.\n"
+            if retained
+            else ""
+        )
         return f"""# Kali validation kit
 
 This kit contains {findings} Nessus finding(s), {executable} executable validation
 step(s), and {manual} manual evidence request(s). It was generated without contacting
 any target.
+{informational}
 
 ## On Kali
 
@@ -305,10 +347,17 @@ credentialed patch, host configuration, or application finding. Follow their exa
 requests in `commands.md` and attach the resulting evidence separately if needed.
 """
 
-    def _commands_markdown(self, findings: list[Finding], steps: list[KitStep]) -> str:
+    def _commands_markdown(
+        self,
+        findings: list[Finding],
+        steps: list[KitStep],
+        retained: list[Finding] | None = None,
+    ) -> str:
         by_finding: dict[str, list[KitStep]] = {}
         for step in steps:
             by_finding.setdefault(step.finding_id, []).append(step)
+        retained = retained or []
+        retained_ids = {f.finding_id for f in retained}
         lines = [
             "# Onsite validation commands",
             "",
@@ -317,6 +366,8 @@ requests in `commands.md` and attach the resulting evidence separately if needed
             "",
         ]
         for finding in findings:
+            if finding.finding_id in retained_ids:
+                continue
             finding_steps = by_finding.get(finding.finding_id, [])
             target = finding_steps[0].target if finding_steps else finding.asset_id
             location = (
@@ -345,7 +396,7 @@ requests in `commands.md` and attach the resulting evidence separately if needed
                 if step.executable:
                     lines.extend(
                         [
-                            f"Script: `scripts/{step.step_id}.sh`",
+                            f"Script: `scripts/{script_filename(step)}`",
                             "",
                             "```bash",
                             shlex.join(step.command_args),
@@ -363,6 +414,30 @@ requests in `commands.md` and attach the resulting evidence separately if needed
                     lines.append(f"- Limitation: {limitation}")
                 if step.expected_evidence or step.limitations:
                     lines.append("")
+
+        if retained:
+            lines.extend([
+                f"## Retained, not scanned ({len(retained)} informational)",
+                "",
+                "Reported for inventory and context rather than as a condition to confirm,",
+                "so no validation script was generated. They remain in the engagement and",
+                "still require a disposition at review time. Rebuild the kit with",
+                "`--include-informational` to generate commands for them.",
+                "",
+                "| Severity | Target | Finding | Plugin |",
+                "| --- | --- | --- | --- |",
+            ])
+            for finding in retained:
+                location = (
+                    f"{finding.port}/{finding.transport.value}"
+                    if finding.port
+                    else "host-level"
+                )
+                lines.append(
+                    f"| {finding.severity.name} | `{location}` | {finding.plugin_name} "
+                    f"| {finding.plugin_id or 'n/a'} |"
+                )
+            lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
 
@@ -606,6 +681,25 @@ def _step_id(finding_id: str, index: int, adapter: str) -> str:
     return f"{clean_finding}__{index:02d}_{clean_adapter}"
 
 
+def script_filename(step: KitStep) -> str:
+    """A readable script name: ``3-MEDIUM_443-tcp_SSL-Certificate...__01_openssl.sh``.
+
+    ``find-37c3608975b2529abc91d78b__01_openssl.sh`` tells an operator scrolling
+    ``scripts/`` nothing about what the script checks or how badly it matters.
+    The step id stays inside the file and in the manifest, which is what the
+    import actually matches on, so readability here costs no traceability.
+    """
+    base = finding_basename(
+        severity=step.severity,
+        target=step.target,
+        port=step.port,
+        transport=step.transport,
+        title=step.title,
+    )
+    suffix = step.step_id.split("__", 1)[-1]
+    return f"{base}__{suffix}.sh"
+
+
 def _write_lf(path: Path, content: str) -> None:
     # Bash shebangs copied from Windows must use LF or Kali reads "bash\r".
     with open(path, "w", encoding="utf-8", newline="\n") as handle:
@@ -634,6 +728,10 @@ def _step_script(step: KitStep) -> str:
     rendered_fields = separator.join(_bash(value) for value in fields)
     return f"""#!/usr/bin/env bash
 set -uo pipefail
+
+# VAPT_FINDING_ID={step.finding_id}
+# Script filenames are readable rather than id-based, so run-all.sh matches
+# --finding against this line instead of against the filename.
 
 KIT_ROOT="$(cd "$(dirname "${{BASH_SOURCE[0]}}")/.." && pwd)"
 export KIT_ROOT
@@ -665,8 +763,15 @@ fi
 found=0
 for script in "$KIT_ROOT"/scripts/*.sh; do
   [[ -e "$script" ]] || continue
-  if [[ -n "$finding_filter" && "$(basename "$script")" != "$finding_filter"__* ]]; then
-    continue
+  if [[ -n "$finding_filter" ]]; then
+    # Match either the exact finding id recorded inside the script, or any
+    # substring of its readable filename -- so `--finding SSL-Certificate`
+    # works as well as `--finding find-37c3608975b2529abc91d78b`.
+    name="$(basename "$script")"
+    if ! grep -q "VAPT_FINDING_ID=$finding_filter$" "$script" \
+       && [[ "${name,,}" != *"${finding_filter,,}"* ]]; then
+      continue
+    fi
   fi
   found=1
   bash "$script"

@@ -161,9 +161,9 @@ def test_cli_redacts_by_default(tmp_path: Path, capsys) -> None:
     assert main(["poc", "export", "--base", str(tmp_path), "--engagement", "e1",
                  "--finding", finding_id]) == 0
     assert "redaction applied" in capsys.readouterr().out
-    exported = (ws.root / "reports" / "poc" /
-                f"{finding_id.replace('find-', 'poc-')}.md").read_text(encoding="utf-8")
-    assert "S3cr3tC0mmunity" not in exported
+    written = list((ws.root / "reports" / "poc").glob("*.md"))
+    assert len(written) == 1, written
+    assert "S3cr3tC0mmunity" not in written[0].read_text(encoding="utf-8")
 
 
 def test_cli_no_redact_warns(tmp_path: Path, capsys) -> None:
