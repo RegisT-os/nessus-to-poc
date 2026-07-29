@@ -319,6 +319,10 @@ class Runbook:
     capture_dir: str = "capture"
     scope_configured: bool = False
     scope_summary: list[str] = field(default_factory=list)
+    #: One line stating which findings this runbook covers, when a saved
+    #: selection narrowed it. Carried into every rendered form so a reader can
+    #: never mistake a scoped runbook for a complete one.
+    selection_summary: str = ""
     entries: list[RunbookEntry] = field(default_factory=list)
 
     # -- derived views ------------------------------------------------------
@@ -362,6 +366,7 @@ class Runbook:
             "capture_dir": self.capture_dir,
             "scope_configured": self.scope_configured,
             "scope_summary": list(self.scope_summary),
+            "selection_summary": self.selection_summary,
             "coverage": self.coverage().to_dict(),
             "required_tools": self.required_tools(),
             "entries": [e.to_dict() for e in self.entries],
@@ -378,5 +383,6 @@ class Runbook:
             capture_dir=data.get("capture_dir", "capture"),
             scope_configured=bool(data.get("scope_configured", False)),
             scope_summary=list(data.get("scope_summary", [])),
+            selection_summary=data.get("selection_summary", ""),
             entries=[RunbookEntry.from_dict(e) for e in data.get("entries", [])],
         )

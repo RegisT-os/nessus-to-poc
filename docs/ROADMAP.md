@@ -166,6 +166,23 @@ Design decisions worth keeping:
   hostname becomes a manual task; shell quoting is the second line of defence,
   not the only one.
 
+## v2.4 - Finding Selection
+
+*Theme: an operator chooses what to verify; the tool records the choice and
+never lets it look like a deletion.*
+
+`select` picks which findings become capture scripts -- interactively, or by
+severity / host / plugin / service / port / free text / explicit id, with
+`--add` and `--remove` to refine. `runbook`, `kit build` and `prepare` honour
+the saved selection automatically; `--all-findings` overrides it.
+
+The guardrail that makes this safe to have at all: a selection is a **scoping
+decision, not a deletion**. Deselected findings stay in the inventory, acquire
+no disposition, and are never a false positive. `coverage` reports against
+every imported finding and names the selection separately; every generated
+artefact states how many findings it left out and that they still require a
+disposition. Criteria are OR'd, because operators think additively.
+
 ---
 
 # Planned

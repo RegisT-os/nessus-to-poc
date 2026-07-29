@@ -293,6 +293,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         output=args.output,
         force=False,
         include_informational=args.include_informational,
+        all_findings=True,  # a fresh engagement cannot have a saved selection yet
     )
     return cmd_kit_build(kit_args)
 
@@ -424,6 +425,18 @@ def cmd_coverage(args: argparse.Namespace) -> int:
     print("  by verdict:")
     for verdict, count in sorted(report.by_verdict.items()):
         print(f"    {count:>4}  {verdict}")
+    # A selection narrows what gets *scripts*, never what coverage reports on.
+    # Saying so here is what keeps "did anything disappear?" answerable.
+    from vapt_verify.selection import Selection
+
+    selection = Selection.load(ws.root)
+    if selection is not None and selection.deselected_count:
+        print(f"  capture selection: {selection.count}/{selection.total_findings} selected "
+              f"for scripts ({selection.method}, by {selection.operator})")
+        print(f"    {selection.deselected_count} deselected finding(s) are counted above and "
+              "still need a disposition;")
+        print("    deselection is a scoping decision, not a false-positive judgement.")
+
     if not report.totals_balance:
         print("ERROR: coverage does not total back to imported findings.")
         return 1
@@ -605,8 +618,21 @@ def cmd_kit_build(args: argparse.Namespace) -> int:
     if ws is None:
         return err
     output = Path(args.output) if args.output else (ws.root / "kali-kit")
+    from vapt_verify.selection import Selection
+
+    selection = None if args.all_findings else Selection.load(ws.root)
+    if selection is not None:
+        print(f"Using saved selection: {selection.count} of {selection.total_findings} "
+              f"finding(s) ({selection.method}, by {selection.operator}).")
+        if selection.deselected_count:
+            print(f"  {selection.deselected_count} deselected finding(s) get no scripts; "
+                  "they remain in the engagement and still need a disposition.")
     result = OnsiteKitBuilder(ws).build(
-        output, force=args.force, include_informational=args.include_informational
+        output,
+        force=args.force,
+        include_informational=args.include_informational,
+        only_finding_ids=set(selection.selected_ids) if selection else None,
+        selection_summary=selection.summary() if selection else "",
     )
     ws.append_audit_event(
         {
@@ -714,6 +740,184 @@ def cmd_evidence_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_select(args: argparse.Namespace) -> int:
+    """Choose which findings become capture scripts."""
+    from vapt_verify.cli.picker import run_picker
+    from vapt_verify.selection import (
+        Selection,
+        SelectionCriteria,
+        select_by_criteria,
+        sort_key,
+    )
+
+    ws, err = _load_ws(args)
+    if ws is None:
+        return err
+    rows = ws.load_findings()
+    if not rows:
+        print("No findings imported yet.")
+        return 2
+
+    existing = Selection.load(ws.root)
+
+    if args.clear:
+        if Selection.clear(ws.root):
+            ws.append_audit_event({"event": "selection_clear", "operator": args.operator})
+            print("Selection cleared. All findings are covered again.")
+        else:
+            print("No selection was set; all findings are already covered.")
+        return 0
+
+    if args.show:
+        if existing is None:
+            print(f"No selection set: all {len(rows)} finding(s) are covered.")
+            return 0
+        _print_selection(existing, rows)
+        return 0
+
+    try:
+        criteria = SelectionCriteria.parse(
+            severity=args.severity, host=args.host, plugin=args.plugin,
+            service=args.service, port=args.port, search=args.search,
+            finding=args.finding,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    interactive = args.interactive or (criteria.is_empty and not args.all)
+    if interactive:
+        preselected = set(existing.selected_ids) if existing and args.add else set()
+        if not criteria.is_empty:
+            # Criteria on an interactive run pre-tick the matching rows, so
+            # "the criticals, plus a couple more" is one pass instead of two.
+            preselected |= {r["finding_id"] for r in rows if criteria.matches(r)}
+        print(f"Selecting findings for engagement '{args.engagement}' "
+              f"({len(rows)} imported).")
+        chosen = run_picker(rows, preselected=preselected)
+        if chosen is None:
+            return 1
+        selection = Selection(
+            engagement_id=args.engagement,
+            selected_ids=[
+                r["finding_id"] for r in sorted(rows, key=sort_key)
+                if r["finding_id"] in chosen
+            ],
+            total_findings=len(rows),
+            operator=args.operator,
+            criteria=criteria,
+            method="interactive",
+            note=args.note,
+            last_operation="picked interactively",
+        )
+    else:
+        selection = select_by_criteria(
+            rows, criteria, engagement_id=args.engagement,
+            operator=args.operator, note=args.note,
+        )
+        matched = len(selection.selected_ids)
+        if (args.add or args.remove) and not matched:
+            # Say so rather than silently reprinting an unchanged selection.
+            print(f"Nothing matched {criteria.describe()}; the selection is unchanged.")
+            return 2
+        if args.add and existing:
+            merged = set(existing.selected_ids) | set(selection.selected_ids)
+            selection.selected_ids = [
+                r["finding_id"] for r in sorted(rows, key=sort_key)
+                if r["finding_id"] in merged
+            ]
+            selection.method = "edited"
+            selection.note = args.note or existing.note
+            selection.last_operation = (
+                f"added {matched} finding(s) matching: {criteria.describe()}"
+            )
+        elif args.remove and existing:
+            remaining = set(existing.selected_ids) - set(selection.selected_ids)
+            removed = len(existing.selected_ids) - len(remaining)
+            selection.selected_ids = [
+                r["finding_id"] for r in sorted(rows, key=sort_key)
+                if r["finding_id"] in remaining
+            ]
+            selection.method = "edited"
+            selection.note = args.note or existing.note
+            selection.last_operation = (
+                f"removed {removed} finding(s) matching: {criteria.describe()}"
+            )
+
+    if not selection.selected_ids:
+        print("That would select no findings, so the selection was not changed.")
+        print("Run 'vapt-verify select --engagement "
+              f"{args.engagement} --show' to see the current selection, or "
+              "--clear to cover everything again.")
+        return 2
+
+    selection.save(ws.root)
+    ws.append_audit_event({
+        "event": "selection_set",
+        "operator": args.operator,
+        "method": selection.method,
+        "selected": selection.count,
+        "total": selection.total_findings,
+        "criteria": selection.criteria.describe(),
+    })
+    _print_selection(selection, rows)
+    print("\nNext:")
+    print(f"  vapt-verify runbook   --engagement {args.engagement}")
+    print(f"  vapt-verify kit build --engagement {args.engagement} --output <dir>")
+    print("Both use this selection automatically; pass --all-findings to ignore it.")
+    return 0
+
+
+def _print_selection(selection: Any, rows: list[dict[str, Any]]) -> None:
+    from vapt_verify.selection import finding_host, sort_key
+
+    chosen = set(selection.selected_ids)
+    print(f"Selection: {selection.count} of {selection.total_findings} finding(s)"
+          f"  [{selection.method}, by {selection.operator}]")
+    if selection.last_operation:
+        print(f"  last change: {selection.last_operation}")
+    elif not selection.criteria.is_empty:
+        print(f"  criteria:    {selection.criteria.describe()}")
+    if selection.note:
+        print(f"  note:        {selection.note}")
+    print("")
+    for row in sorted((r for r in rows if r["finding_id"] in chosen), key=sort_key):
+        port = row.get("port", 0) or 0
+        location = f"{port}/{row.get('transport', '')}" if port else "host"
+        print(f"  [x] {row.get('severity_label', '')!s:<13} "
+              f"{finding_host(row):<16} {location:<10} {row.get('plugin_name', '')}")
+    if selection.deselected_count:
+        print(f"\n  {selection.deselected_count} finding(s) deselected. They remain in the")
+        print("  engagement, are NOT false positives, and still require a disposition.")
+        print("  'vapt-verify coverage' still reports against every imported finding.")
+
+
+def _apply_selection(
+    ws: EngagementWorkspace,
+    rows: list[dict[str, Any]],
+    *,
+    all_findings: bool,
+    label: str,
+) -> list[dict[str, Any]]:
+    """Filter to the saved selection, saying so rather than silently narrowing."""
+    from vapt_verify.selection import Selection
+
+    selection = Selection.load(ws.root)
+    if selection is None:
+        return rows
+    if all_findings:
+        print(f"A selection of {selection.count}/{selection.total_findings} finding(s) "
+              "exists but --all-findings was passed; covering everything.")
+        return rows
+    filtered = selection.apply(rows)
+    print(f"Using saved selection: {len(filtered)} of {len(rows)} finding(s) "
+          f"({selection.method}, by {selection.operator}).")
+    if selection.deselected_count:
+        print(f"  {selection.deselected_count} deselected finding(s) are excluded from this "
+              f"{label}; they remain in the engagement and still need a disposition.")
+    return filtered
+
+
 def cmd_runbook(args: argparse.Namespace) -> int:
     """Generate the commands the operator runs by hand to capture evidence."""
     from vapt_verify.runbook.builder import RunbookBuilder
@@ -734,6 +938,11 @@ def cmd_runbook(args: argparse.Namespace) -> int:
     if not rows:
         print("No matching findings. (Import a scan first, or relax the filters.)")
         return 2
+    rows = _apply_selection(ws, rows, all_findings=args.all_findings, label="runbook")
+    if not rows:
+        print("The saved selection matches none of these findings.")
+        print(f"Review it with: vapt-verify select --engagement {args.engagement} --show")
+        return 2
 
     builder = RunbookBuilder(
         capabilities=Capabilities.detect(),
@@ -746,6 +955,11 @@ def cmd_runbook(args: argparse.Namespace) -> int:
         assets=ws.load_assets(),
         include_informational=args.include_informational,
     )
+    from vapt_verify.selection import Selection
+
+    active = None if args.all_findings else Selection.load(ws.root)
+    if active is not None and active.deselected_count:
+        runbook.selection_summary = active.summary()
 
     out_dir = Path(args.output) if args.output else (ws.root / "runbooks")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1652,6 +1866,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--timeout", type=float, default=120.0)
     p_run.set_defaults(func=cmd_run)
 
+    p_select = sub.add_parser(
+        "select",
+        help="choose which findings become capture scripts (interactive by default)",
+    )
+    add_base(p_select)
+    add_engagement(p_select)
+    p_select.add_argument("--interactive", action="store_true",
+                          help="pick from a list (the default when no criteria are given)")
+    p_select.add_argument("--all", action="store_true", help="select every finding")
+    p_select.add_argument("--severity", default="",
+                          help="comma-separated severities, e.g. CRITICAL,HIGH")
+    p_select.add_argument("--host", default="", help="comma-separated hosts/IPs")
+    p_select.add_argument("--plugin", default="", help="comma-separated Nessus plugin ids")
+    p_select.add_argument("--service", default="", help="comma-separated service names")
+    p_select.add_argument("--port", default="", help="comma-separated ports")
+    p_select.add_argument("--search", default="",
+                          help="substring of the finding name/synopsis/service")
+    p_select.add_argument("--finding", action="append", default=[],
+                          help="an explicit finding id (repeatable)")
+    p_select.add_argument("--add", action="store_true",
+                          help="add matches to the current selection instead of replacing it")
+    p_select.add_argument("--remove", action="store_true",
+                          help="remove matches from the current selection")
+    p_select.add_argument("--show", action="store_true", help="print the current selection")
+    p_select.add_argument("--clear", action="store_true",
+                          help="drop the selection so every finding is covered again")
+    p_select.add_argument("--note", default="", help="why this scope was chosen")
+    p_select.add_argument("--operator", default="unknown")
+    p_select.set_defaults(func=cmd_select)
+
     p_runbook = sub.add_parser(
         "runbook",
         help="generate the commands to run by hand to capture evidence (nmap/openssl/...)",
@@ -1670,6 +1914,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_runbook.add_argument("--timeout", type=int, default=120,
                            help="per-step timeout recorded in the runbook")
     p_runbook.add_argument(
+        "--all-findings", action="store_true",
+        help="ignore any saved selection and cover every finding",
+    )
+    p_runbook.add_argument(
         "--include-informational", action="store_true",
         help="also generate scanning commands for informational findings "
              "(default: list them, do not probe them)",
@@ -1683,6 +1931,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_kit_build.add_argument("--output", default="")
     p_kit_build.add_argument(
         "--force", action="store_true", help="refresh generated files; preserve evidence/"
+    )
+    p_kit_build.add_argument(
+        "--all-findings", action="store_true",
+        help="ignore any saved selection and cover every finding",
     )
     p_kit_build.add_argument(
         "--include-informational", action="store_true",

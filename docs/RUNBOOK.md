@@ -72,6 +72,42 @@ finding produced no command, no manual task and no explicit retain decision,
 `runbook` **exits 1** and names it — the same fail-closed posture as the import
 reconciliation gate.
 
+## Choosing which findings to cover
+
+By default a runbook covers every imported finding. `vapt-verify select`
+narrows it, and the choice is saved in the workspace so `runbook`, `kit build`
+and `prepare` all honour the same set.
+
+```bash
+vapt-verify select --engagement demo1                        # interactive picker
+vapt-verify select --engagement demo1 --severity CRITICAL,HIGH
+vapt-verify select --engagement demo1 --host 192.0.2.10 --add
+vapt-verify select --engagement demo1 --search SSL --add
+vapt-verify select --engagement demo1 --severity LOW --remove
+vapt-verify select --engagement demo1 --show
+vapt-verify select --engagement demo1 --clear
+```
+
+Criteria are **OR'd** across kinds — operators think additively ("the
+criticals, plus everything on the DMZ box, plus that one SSL finding"), and
+intersecting would return nothing for exactly the request they meant.
+
+Interactive picker commands: `1-5,9` toggle, `a`/`n`/`v` all/none/invert within
+the current view, `s HIGH` select by severity, `/text` filter, `p`/`<` page,
+`d` done, `q` quit without saving. It is plain stdin — no curses, no ANSI — so
+it works in a Windows console, over SSH and in a Kali VM.
+
+**Deselecting is scoping, not deleting.** A deselected finding remains in the
+inventory, gets no disposition from being deselected, and is not a false
+positive. The rules that follow from that, all test-enforced:
+
+- `coverage` reports against every imported finding regardless of the
+  selection, and names the selection separately.
+- every generated runbook, kit and README states how many findings were left
+  out and that they still require a disposition.
+- `--all-findings` on `runbook` or `kit build` ignores the selection for one
+  run and says so.
+
 ## Informational findings
 
 Informational findings report inventory and context, not a condition to

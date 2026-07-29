@@ -114,6 +114,8 @@ class OnsiteKitBuilder:
         *,
         force: bool = False,
         include_informational: bool = False,
+        only_finding_ids: set[str] | None = None,
+        selection_summary: str = "",
     ) -> KitBuildResult:
         root = Path(output_dir)
         manifest_path = root / "manifest.json"
@@ -139,7 +141,16 @@ class OnsiteKitBuilder:
         (root / "evidence").mkdir(exist_ok=True)
 
         assets = {a["asset_id"]: a for a in self.ws.load_assets()}
-        findings = [Finding.from_dict(row) for row in self.ws.load_findings()]
+        imported = [Finding.from_dict(row) for row in self.ws.load_findings()]
+        # A selection narrows what gets a script. It never removes a finding from
+        # the engagement, so the count that was left out is carried into the kit
+        # and stated in its README rather than quietly vanishing.
+        findings = (
+            [f for f in imported if f.finding_id in only_finding_ids]
+            if only_finding_ids is not None
+            else imported
+        )
+        deselected = len(imported) - len(findings)
         # Informational findings report state, not a condition to confirm, so no
         # validation script is generated for them by default. They are still
         # listed in commands.md and counted here -- carried, not dropped.
@@ -161,6 +172,9 @@ class OnsiteKitBuilder:
             "engagement_id": self.ws.root.name,
             "purpose": "Manual validation from Kali; generated on Windows without execution.",
             "finding_count": len(findings),
+            "imported_finding_count": len(imported),
+            "deselected_finding_count": deselected,
+            "selection_summary": selection_summary,
             "executable_step_count": len(executable),
             "manual_step_count": len(manual),
             "retained_informational_count": len(retained),
@@ -180,7 +194,10 @@ class OnsiteKitBuilder:
         _write_lf(root / "manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         _write_lf(
             root / "README.md",
-            self._readme(len(findings), len(executable), len(manual), len(retained)),
+            self._readme(
+                len(findings), len(executable), len(manual), len(retained),
+                deselected=deselected, selection_summary=selection_summary,
+            ),
         )
         _write_lf(root / "commands.md", self._commands_markdown(findings, steps, retained))
         _write_lf(root / "lib" / "capture.sh", _capture_library())
@@ -310,7 +327,24 @@ class OnsiteKitBuilder:
             nmap_role="inappropriate",
         )
 
-    def _readme(self, findings: int, executable: int, manual: int, retained: int = 0) -> str:
+    def _readme(
+        self,
+        findings: int,
+        executable: int,
+        manual: int,
+        retained: int = 0,
+        *,
+        deselected: int = 0,
+        selection_summary: str = "",
+    ) -> str:
+        selection = (
+            f"\n## Scope of this kit\n\n{selection_summary or ''}\n"
+            f"\n{deselected} imported finding(s) were deselected and have no scripts here.\n"
+            "They remain in the engagement, are not false positives, and still require a\n"
+            "disposition. `vapt-verify coverage` reports against every imported finding.\n"
+            if deselected
+            else ""
+        )
         informational = (
             f"\n{retained} informational finding(s) are listed in `commands.md` under "
             "\"Retained, not scanned\" with no validation script. They report inventory or\n"
@@ -325,7 +359,7 @@ class OnsiteKitBuilder:
 This kit contains {findings} Nessus finding(s), {executable} executable validation
 step(s), and {manual} manual evidence request(s). It was generated without contacting
 any target.
-{informational}
+{selection}{informational}
 
 ## On Kali
 

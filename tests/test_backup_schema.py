@@ -62,4 +62,4 @@ def test_restore_detects_tampering(tmp_path: Path) -> None:
 def test_version_consistency() -> None:
     pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
     assert f'version = "{__version__}"' in pyproject
-    assert __version__ == "2.3.0"
+    assert __version__ == "2.4.0"

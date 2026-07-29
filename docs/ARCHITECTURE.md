@@ -48,6 +48,7 @@ src/vapt_verify/
 ├── review/                  # (v0.6) reviewer workflow, false-positive approval
 ├── reporting/               # (v0.7) markdown/json/csv/coverage
 ├── naming.py                # human-readable export file/directory names
+├── selection.py             # which findings get capture scripts (scoping, not deletion)
 ├── security/client_data_check.py   # repository safety checker
 ├── utilities/               # hashing, stable ids/fingerprints, jsonl
 └── workspace.py             # engagement workspace / evidence-bundle layout

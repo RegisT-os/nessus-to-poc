@@ -79,8 +79,10 @@ def _header_lines(runbook: Runbook) -> list[str]:
         f"({coverage.with_runnable_command} with commands, "
         f"{coverage.manual_only} manual-only)",
         "",
-        "SCOPE",
     ]
+    if runbook.selection_summary:
+        lines += ["COVERAGE", f"  {runbook.selection_summary}", ""]
+    lines += ["SCOPE"]
     lines += [f"  {s}" for s in runbook.scope_summary]
     lines += [
         "",
@@ -386,6 +388,8 @@ def to_markdown(runbook: Runbook) -> str:
         "## Scope",
         "",
     ]
+    if runbook.selection_summary:
+        lines += [f"- **Coverage:** {runbook.selection_summary}"]
     lines += [f"- {s}" for s in runbook.scope_summary]
     lines += [
         "",
