@@ -44,7 +44,7 @@ src/vapt_verify/
 │   ├── builder.py           #   findings -> argv via the same Adapter.build_argv
 │   ├── render.py            #   bash / powershell / markdown / json manifest
 │   └── ingest.py            #   captured output -> hashed, parsed evidence
-├── evidence/                # (v0.3) hashed, timestamped evidence manifests
+├── kit.py                   # (v2.3) portable Kali validation kit + evidence import
 ├── review/                  # (v0.6) reviewer workflow, false-positive approval
 ├── reporting/               # (v0.7) markdown/json/csv/coverage
 ├── naming.py                # human-readable export file/directory names
@@ -54,8 +54,11 @@ src/vapt_verify/
 └── workspace.py             # engagement workspace / evidence-bundle layout
 ```
 
-Top-level (repo) directories: `recipes/`, `profiles/` (with `examples/` and
-git-ignored `private/`), `examples/`, `tests/`, `fixtures/`, `docs/`, `legacy/`.
+Top-level (repo) directories: `profiles/` (with `examples/` and git-ignored
+`private/`), `examples/`, `tests/` (with `tests/fixtures/`), `docs/`, `legacy/`
+and a git-ignored `engagements/`. Recipes are **not** a top-level directory:
+they ship inside the package as `src/vapt_verify/recipes/data/*.yaml` so they
+survive a non-editable install (v1.1).
 
 ## Data flow (v0.1)
 

@@ -4,7 +4,7 @@
 
 Three horizons:
 
-- **Delivered (v0.1 → v2.2)** — shipped, tested, on the branch. Recorded here so
+- **Delivered (v0.1 → v2.4)** — shipped, tested, merged. Recorded here so
   the history of *why* each capability exists is not lost.
 - **Planned majors (v3.0 → v10.0)** — each is a coherent capability step, broken
   into numbered slices with deliverables, guardrails and acceptance criteria.
