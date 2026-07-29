@@ -14,9 +14,27 @@ disappear?"* with a definitive **no**.
 
 ## Status
 
-**v2.0 — Multi-scanner correlation** (see [`docs/ROADMAP.md`](docs/ROADMAP.md)).
-152 tests; all 32 mandatory regression tests from the brief pass; `ruff` +
+**v2.3 — Manual capture runbooks** (see [`docs/ROADMAP.md`](docs/ROADMAP.md)).
+268 tests; all 32 mandatory regression tests from the brief pass; `ruff` +
 `mypy --strict` clean.
+
+New in v2.3 — **`runbook` + `evidence import`**: the Nessus→commands half of the
+deliverable. `vapt-verify runbook` turns **every** finding into the concrete
+commands to run by hand — `nmap`, `openssl s_client` with the right SNI,
+`ssh-audit`, `snmpget`, `dig` — as a bash script for Kali, a PowerShell script
+for Windows, a Markdown checklist and a JSON manifest. You run them where the
+targets are reachable; `vapt-verify evidence import` reads the captured output
+back, parses it with the adapter that generated the command, hashes it, and
+attaches it to the finding, so `review` and `poc export` complete the loop.
+
+Three properties make it usable rather than merely correct: it **generates for
+every finding** (a finding with no automatable step gets an explicit manual
+evidence task, and the command exits 1 if anything is left unaccounted for);
+scope **labels** commands rather than suppressing them, so an engagement whose
+scope is not filled in yet still produces a working runbook; and a target that
+is not a valid IP or hostname yields **no command at all**, so a mangled scanner
+field can never reach a shell. Full guide:
+[`docs/RUNBOOK.md`](docs/RUNBOOK.md).
 
 New in v2.2 — **evidence sanitization & integrity**:
 
@@ -104,6 +122,17 @@ vapt-verify inventory services --engagement demo1
 vapt-verify findings list      --engagement demo1
 vapt-verify findings show <finding-id> --engagement demo1
 
+# Generate the commands to run BY HAND to capture evidence (bash + PowerShell
+# + checklist + manifest). Covers every finding, not just the nmap-able ones.
+vapt-verify runbook --engagement demo1
+
+# ...run them where the targets are reachable...
+bash engagements/demo1/runbooks/runbook.sh
+
+# ...then feed the captured output back in
+vapt-verify evidence import --engagement demo1 \
+  --manifest engagements/demo1/runbooks/runbook.json --capture-dir ./capture
+
 # Export report-ready PoC documents (scanner claim -> command -> capture ->
 # verdict -> evidence hash -> method limitations)
 vapt-verify poc export --engagement demo1 --finding <finding-id> --print
@@ -148,6 +177,7 @@ See [`docs/ENGAGEMENT_PROFILES.md`](docs/ENGAGEMENT_PROFILES.md) and
 
 ## Documentation
 
+- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — Nessus to commands you run yourself, and back
 - [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) — verification principles, verdict taxonomy
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module layout & data flow
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — slice plan

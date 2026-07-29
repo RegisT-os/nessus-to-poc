@@ -136,6 +136,36 @@ basic-auth URLs, cookies, AWS keys and NTLM hashes — on by default for
 deliverables, presentation-layer only. `evidence verify` re-hashes stored
 captures and fails closed on modification or loss.
 
+## v2.3 — Manual Capture Runbooks ✅
+
+*Theme: the operator runs the commands; the platform generates them and takes
+the results back.*
+
+v2.1 assembled a PoC document from evidence that already existed. v2.3 supplies
+the other half: `runbook` turns every finding into the concrete commands to run
+by hand (bash for Kali, PowerShell for Windows, a Markdown checklist, a JSON
+manifest), and `evidence import` reads the captured output back, parses it with
+the adapter that generated the command, hashes it, and attaches it.
+
+Design decisions worth keeping:
+
+- **Generation is not execution.** `run` blocks an out-of-scope target *before*
+  building a command, which is right for execution and wrong for planning — an
+  engagement with no scope configured produced nothing at all. The runbook
+  generates regardless and **labels** scope per command; unauthorised commands
+  are emitted commented out with their reason, never deleted.
+- **Commands come from the adapters.** A conformance test asserts every runbook
+  argv equals what `Adapter.build_argv` produces, so the command an operator
+  runs and the command `run` would execute cannot drift.
+- **Coverage is fail-closed.** Every finding yields a command or an explicit
+  manual evidence task; the command exits 1 and names anything unaccounted for.
+- **A missing tool is a capability gap.** The scripts skip a step whose tool is
+  absent and write a `.skipped` marker; the import reports it as a gap, never as
+  evidence the condition is absent.
+- **A mangled target yields no command.** A host field that is not a valid IP or
+  hostname becomes a manual task; shell quoting is the second line of defence,
+  not the only one.
+
 ---
 
 # Planned

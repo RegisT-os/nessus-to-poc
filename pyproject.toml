@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vapt-verify"
-version = "2.2.0"
+version = "2.3.0"
 description = "VAPT Verification Orchestrator — local-first, multi-engagement vulnerability verification and evidence orchestration platform."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -54,7 +54,10 @@ select = ["E", "F", "I", "UP", "B", "S", "C4", "SIM", "RUF"]
 ignore = ["S101"]  # allow `assert` in tests
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "S105", "S106", "E501"]
+# S603/S607: some tests deliberately shell out (bash -n to syntax-check a
+# generated runbook; /bin/sh to prove sh_quote survives the real parser). The
+# argv is hardcoded in the test, so the rules have nothing to protect here.
+"tests/**" = ["S101", "S105", "S106", "S603", "S607", "E501"]
 "legacy/**" = ["ALL"]  # preserved legacy artifact; not linted or maintained
 
 [tool.mypy]

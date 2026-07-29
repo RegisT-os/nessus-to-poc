@@ -39,6 +39,11 @@ src/vapt_verify/
 ├── planning/                # (v0.2) per-finding / per-asset verification plans
 ├── adapters/                # (v0.3+) nmap, tcp, openssl, http, manual, ...
 ├── execution/               # (v0.3) dry-run-by-default runner, scope enforcement
+├── runbook/                 # (v2.3) commands the operator runs by hand
+│   ├── models.py            #   Runbook / entry / command / manual task + coverage
+│   ├── builder.py           #   findings -> argv via the same Adapter.build_argv
+│   ├── render.py            #   bash / powershell / markdown / json manifest
+│   └── ingest.py            #   captured output -> hashed, parsed evidence
 ├── evidence/                # (v0.3) hashed, timestamped evidence manifests
 ├── review/                  # (v0.6) reviewer workflow, false-positive approval
 ├── reporting/               # (v0.7) markdown/json/csv/coverage
