@@ -165,7 +165,7 @@ def test_missing_file_is_rejected_clearly(tmp_path: Path) -> None:
 def test_quoted_and_padded_paths_are_normalized(raw: str, expected: str) -> None:
     # Compare as text: separator handling is the platform's job, quote/whitespace
     # stripping is ours.
-    assert str(normalize_user_path(raw)) == expected
+    assert normalize_user_path(raw) == Path(expected)
 
 
 def test_import_accepts_a_quoted_path(tmp_path: Path, capsys) -> None:
