@@ -68,6 +68,35 @@ SHA-256 against the recorded digest, reporting `verified` / `modified` /
 loss, so a broken chain of custody cannot pass silently. Run it before report
 handover and after any restore.
 
+## Generated runbooks (v2.3)
+
+`vapt-verify runbook` writes shell and PowerShell scripts that an operator runs
+by hand. Generated scripts are a supply chain of their own, so:
+
+- **Targets are validated before rendering.** A host field that is not a valid
+  IP address or hostname produces **no command**; it becomes a manual task with
+  the reason attached. This is the same rule `ScopeEnforcer` applies before
+  execution (`security/scope.py: is_valid_target`).
+- **Every argument is literal-quoted** (`sh_quote` / `ps_quote`) and round-trip
+  tested against the real shell parser. A scanner-supplied string is data inside
+  a quoted argument and cannot become a second command.
+- **Scope labels, never suppresses.** A target outside the engagement's approved
+  scope is emitted **commented out** with the reason. An engagement with no
+  scope configured is stated as unconfirmed on every command and in the header —
+  the tool never claims an authorisation it cannot verify.
+- **No `set -e`, no `shell=True` equivalent.** A non-zero exit from a probe is
+  ordinary output, not a failure to abort on and not a verdict.
+- Generated scripts contain only what the declarative recipes describe: no
+  password or community-string guessing, no destructive HTTP methods, no
+  exploitation.
+
+`vapt-verify evidence import` copies each captured file into the workspace
+unmodified and hashes the stored copy, so an operator-run capture carries the
+same chain of custody as one `run` produced. Re-import is idempotent by digest.
+A step whose tool was missing on the operator's machine is recorded as a
+**capability gap**, never as evidence that the condition is absent, and no
+import path sets a verdict.
+
 ## Credentials
 
 - Engagement config stores **credential references only** (e.g.

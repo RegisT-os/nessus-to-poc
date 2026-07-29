@@ -196,8 +196,15 @@ def test_cli_poc_export_writes_all_formats(tmp_path: Path, capsys) -> None:
                "--finding", finding_id, "--format", "all"])
     assert rc == 0
     out_dir = ws.root / "reports" / "poc"
-    stem = finding_id.replace("find-", "poc-")
-    assert (out_dir / f"{stem}.md").exists()
+    # Readable, severity-ranked filenames -- not poc-<hash>.
+    written = sorted(p.name for p in out_dir.glob("*.md"))
+    assert len(written) == 1, written
+    stem = written[0][:-3]
+    assert "poc-" not in stem
+    assert finding_id not in stem
+    assert stem.split("_")[0] in {"1-CRITICAL", "2-HIGH", "3-MEDIUM", "4-LOW",
+                                  "5-INFORMATIONAL"}
+    assert "SSL" in stem, stem
     assert (out_dir / f"{stem}.html").exists()
     payload = json.loads((out_dir / "poc.json").read_text(encoding="utf-8"))
     assert payload[0]["finding_id"] == finding_id

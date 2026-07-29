@@ -23,6 +23,24 @@ IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?!-)[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63})*$")
 
 
+def is_valid_target(value: str) -> bool:
+    """Is ``value`` a syntactically valid IP address or hostname?
+
+    Shape validation only -- it says nothing about authorisation. It exists so
+    that callers which *render* a target (the runbook generator) can refuse a
+    mangled scanner field before it ever reaches a shell script, using exactly
+    the same rule the scope enforcer applies before execution.
+    """
+    raw = value.strip()
+    if not raw:
+        return False
+    try:
+        ipaddress.ip_address(raw)
+    except ValueError:
+        return bool(_HOSTNAME_RE.match(raw))
+    return True
+
+
 @dataclass
 class ScopeDecision:
     target: str

@@ -39,16 +39,26 @@ src/vapt_verify/
 ├── planning/                # (v0.2) per-finding / per-asset verification plans
 ├── adapters/                # (v0.3+) nmap, tcp, openssl, http, manual, ...
 ├── execution/               # (v0.3) dry-run-by-default runner, scope enforcement
-├── evidence/                # (v0.3) hashed, timestamped evidence manifests
+├── runbook/                 # (v2.3) commands the operator runs by hand
+│   ├── models.py            #   Runbook / entry / command / manual task + coverage
+│   ├── builder.py           #   findings -> argv via the same Adapter.build_argv
+│   ├── render.py            #   bash / powershell / markdown / json manifest
+│   └── ingest.py            #   captured output -> hashed, parsed evidence
+├── kit.py                   # (v2.3) portable Kali validation kit + evidence import
 ├── review/                  # (v0.6) reviewer workflow, false-positive approval
 ├── reporting/               # (v0.7) markdown/json/csv/coverage
+├── naming.py                # human-readable export file/directory names
+├── selection.py             # which findings get capture scripts (scoping, not deletion)
 ├── security/client_data_check.py   # repository safety checker
 ├── utilities/               # hashing, stable ids/fingerprints, jsonl
 └── workspace.py             # engagement workspace / evidence-bundle layout
 ```
 
-Top-level (repo) directories: `recipes/`, `profiles/` (with `examples/` and
-git-ignored `private/`), `examples/`, `tests/`, `fixtures/`, `docs/`, `legacy/`.
+Top-level (repo) directories: `profiles/` (with `examples/` and git-ignored
+`private/`), `examples/`, `tests/` (with `tests/fixtures/`), `docs/`, `legacy/`
+and a git-ignored `engagements/`. Recipes are **not** a top-level directory:
+they ship inside the package as `src/vapt_verify/recipes/data/*.yaml` so they
+survive a non-editable install (v1.1).
 
 ## Data flow (v0.1)
 

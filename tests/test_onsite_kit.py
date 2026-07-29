@@ -176,3 +176,61 @@ def test_prepare_is_the_simple_one_command_entry_point(tmp_path: Path) -> None:
     assert rc == 0
     assert (base / "client1" / "engagement.yaml").exists()
     assert (kit / "run-all.sh").exists()
+
+
+def test_kit_script_names_are_readable_not_hashes(tmp_path: Path) -> None:
+    """`find-37c3608975b2529abc91d78b__01_openssl.sh` tells an operator nothing.
+
+    Scrolling `scripts/` should show what each script checks and how badly it
+    matters. The finding id lives inside the file, which is what the import
+    matches on, so readability costs no traceability.
+    """
+    ws = _workspace(tmp_path)
+    kit = tmp_path / "kit"
+    OnsiteKitBuilder(ws).build(kit)
+
+    names = sorted(p.name for p in (kit / "scripts").glob("*.sh"))
+    assert names
+    for name in names:
+        assert not name.startswith("find-"), name
+        assert name.split("-")[0] in {"1", "2", "3", "4", "5"}, name
+    assert any("SSL-Certificate-Cannot-Be-Trusted" in n for n in names)
+    # Worst-first when the directory is listed.
+    assert names == sorted(names)
+    # Traceability is preserved inside the script.
+    for script in (kit / "scripts").glob("*.sh"):
+        assert "VAPT_FINDING_ID=find-" in script.read_text(encoding="utf-8")
+
+
+def test_kit_does_not_scan_informational_findings_but_still_lists_them(
+    tmp_path: Path,
+) -> None:
+    ws = _workspace(tmp_path)
+    kit = tmp_path / "kit"
+    OnsiteKitBuilder(ws).build(kit)
+
+    manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["retained_informational_count"] >= 1
+    retained_ids = {r["finding_id"] for r in manifest["retained_informational"]}
+    assert retained_ids
+    # No step -- and so no script -- is generated for them...
+    assert not [s for s in manifest["steps"] if s["finding_id"] in retained_ids]
+    for script in (kit / "scripts").glob("*.sh"):
+        assert not script.name.startswith("5-INFORMATIONAL"), script.name
+    # ...but the operator is told they exist and why they were not scanned.
+    commands = (kit / "commands.md").read_text(encoding="utf-8")
+    assert "Retained, not scanned" in commands
+    for row in manifest["retained_informational"]:
+        assert row["title"] in commands
+    assert "still require a disposition" in commands
+    assert "informational finding(s)" in (kit / "README.md").read_text(encoding="utf-8")
+
+
+def test_kit_include_informational_generates_their_scripts(tmp_path: Path) -> None:
+    ws = _workspace(tmp_path)
+    kit = tmp_path / "kit"
+    OnsiteKitBuilder(ws).build(kit, include_informational=True)
+
+    manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["retained_informational_count"] == 0
+    assert [s for s in manifest["steps"] if s["severity"] == "INFORMATIONAL"]
