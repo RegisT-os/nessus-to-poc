@@ -37,6 +37,10 @@ src/vapt_verify/
 ├── classification/          # (v0.2) explainable recipe selection
 ├── recipes/                 # (v0.2) versioned, declarative recipe library
 ├── planning/                # (v0.2) per-finding / per-asset verification plans
+├── playbooks/               # (v3.1) declarative ordered pipelines, conditional steps
+│   ├── models.py            #   Playbook / step / Condition (data, never an expression)
+│   ├── library.py           #   package-data loading + load-time validation
+│   └── data/builtin.yaml    #   shipped playbooks
 ├── adapters/                # (v0.3+) nmap, tcp, openssl, http, manual, ...
 ├── execution/               # (v0.3) dry-run-by-default runner, scope enforcement
 ├── runbook/                 # (v2.3) commands the operator runs by hand

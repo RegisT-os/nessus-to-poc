@@ -740,6 +740,72 @@ def cmd_evidence_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_playbook_list(args: argparse.Namespace) -> int:
+    from vapt_verify.playbooks import PlaybookLibrary, validate_library
+
+    library = PlaybookLibrary.load_builtin()
+    if not library.playbooks:
+        print("No playbooks are installed.")
+        return 2
+    problems = validate_library(library)
+    print(f"{len(library)} playbook(s):")
+    for playbook in library.playbooks:
+        status = "INVALID" if playbook.playbook_id in problems else "ok"
+        scope = ", ".join(playbook.recipe_ids or playbook.families) or "(unscoped)"
+        print(f"  [{status:>7}] {playbook.playbook_id:<24} {len(playbook.steps)} step(s)"
+              f"  {playbook.title}")
+        print(f"            applies to: {scope}")
+    if problems:
+        print(f"\n{len(problems)} playbook(s) failed validation; run "
+              "'vapt-verify playbook validate' for details.")
+        return 1
+    return 0
+
+
+def cmd_playbook_show(args: argparse.Namespace) -> int:
+    from vapt_verify.playbooks import PlaybookLibrary, describe_playbook, validate_playbook
+
+    library = PlaybookLibrary.load_builtin()
+    playbook = library.by_id(args.playbook)
+    if playbook is None:
+        print(f"error: no playbook with id {args.playbook!r}")
+        print("Available: " + ", ".join(p.playbook_id for p in library.playbooks))
+        return 2
+    for line in describe_playbook(playbook):
+        print(line)
+    problems = validate_playbook(playbook)
+    if problems:
+        print("\nVALIDATION PROBLEMS:")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 1
+    return 0
+
+
+def cmd_playbook_validate(args: argparse.Namespace) -> int:
+    from vapt_verify.playbooks import PlaybookLibrary, validate_library
+
+    if args.path:
+        library = PlaybookLibrary.load_dirs([Path(args.path)])
+        source = args.path
+    else:
+        library = PlaybookLibrary.load_builtin()
+        source = PlaybookLibrary.builtin_location()
+    print(f"Validating {len(library)} playbook(s) from {source}")
+    problems = validate_library(library)
+    if not problems:
+        print("OK: every playbook's steps are runnable and every condition can fire.")
+        return 0
+    for playbook_id, entries in sorted(problems.items()):
+        print(f"\n{playbook_id}:")
+        for entry in entries:
+            print(f"  - {entry}")
+    print(f"\nFAILED: {len(problems)} playbook(s) have problems.")
+    print("A condition that can never be true is not a no-op: the step silently")
+    print("never runs, which looks exactly like a step that does not apply.")
+    return 1
+
+
 def cmd_select(args: argparse.Namespace) -> int:
     """Choose which findings become capture scripts."""
     from vapt_verify.cli.picker import run_picker
@@ -1865,6 +1931,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--operator", default="unknown")
     p_run.add_argument("--timeout", type=float, default=120.0)
     p_run.set_defaults(func=cmd_run)
+
+    p_pb = sub.add_parser(
+        "playbook", help="declarative ordered verification pipelines"
+    )
+    pb_sub = p_pb.add_subparsers(dest="playbook_command", required=True)
+    p_pb_list = pb_sub.add_parser("list", help="list installed playbooks")
+    p_pb_list.set_defaults(func=cmd_playbook_list)
+    p_pb_show = pb_sub.add_parser("show", help="show a playbook's steps and conditions")
+    p_pb_show.add_argument("playbook", help="playbook id")
+    p_pb_show.set_defaults(func=cmd_playbook_show)
+    p_pb_validate = pb_sub.add_parser(
+        "validate", help="check that every step can run and every condition can fire"
+    )
+    p_pb_validate.add_argument("--path", default="",
+                               help="validate a directory of playbook YAML instead of the "
+                                    "installed library")
+    p_pb_validate.set_defaults(func=cmd_playbook_validate)
 
     p_select = sub.add_parser(
         "select",

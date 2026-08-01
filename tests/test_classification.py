@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from nessus_builder import default_host_props, nessus_document, report_host, report_item
 from vapt_verify.classification.classifier import Classifier
 from vapt_verify.classification.models import KNOWN_TOOLS, Capabilities
 from vapt_verify.importers.nessus_xml import NessusImporter
-from vapt_verify.models.enums import Disposition
+from vapt_verify.models.enums import Disposition, Severity, Transport
+from vapt_verify.models.finding import Finding
 from vapt_verify.recipes.library import RecipeLibrary
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -135,3 +138,69 @@ def test_classification_is_explainable(tmp_path: Path) -> None:
     assert c.selection_rationale
     assert c.rejected_recipes  # explains why other recipes were not chosen
     assert c.expected_confirming_evidence
+
+
+# --- generic plugin families are not signals --------------------------------
+
+def _finding(name: str, family: str, port: int = 443, service: str = "https",
+             severity: int = 2) -> Finding:
+    return Finding(
+        finding_id="f-generic", fingerprint="x", asset_id="a", provenance=None,
+        plugin_id="999999", plugin_name=name, plugin_family=family,
+        severity=Severity(severity), port=port,
+        transport=Transport.TCP if port else Transport.NONE, service=service,
+    )
+
+
+def _classify(finding: Finding) -> str:
+    library = RecipeLibrary.load_builtin()
+    return Classifier(library, Capabilities(available=set())).classify(
+        finding
+    ).selected_recipe_id
+
+
+@pytest.mark.parametrize(
+    "name,family,port,service",
+    [
+        ("Unknown Service Exposed", "General", 9001, "unknown"),
+        ("HTTP Server Type and Version", "General", 80, "www"),
+        ("Service Detection", "Misc.", 8080, "www"),
+        ("Nessus Scan Information", "Misc", 0, ""),
+    ],
+)
+def test_generic_family_does_not_select_a_specialised_recipe(
+    name: str, family: str, port: int, service: str
+) -> None:
+    """"General" and "Misc." are catch-all buckets, not evidence of anything.
+
+    `vmware-hypervisor-advisory` lists them alongside its VMware/ESXi name
+    indicators. Because it sits at selection layer 2, matching on family alone
+    let it win over every layer-3/4 recipe -- so an ordinary HTTP finding was
+    routed to manual hypervisor evidence instead of an HTTP check. Those two
+    families cover a large share of a real scan, so this was not a rare edge.
+    """
+    selected = _classify(_finding(name, family, port, service))
+    assert selected != "vmware-hypervisor-advisory", (
+        f"a {family!r} finding named {name!r} was routed to a VMware recipe"
+    )
+
+
+def test_a_real_vmware_finding_still_selects_the_hypervisor_recipe() -> None:
+    """The fix must not cost the recipe its genuine signal."""
+    assert _classify(
+        _finding("VMware ESXi Advisory VMSA-2024-0001", "Misc.")
+    ) == "vmware-hypervisor-advisory"
+
+
+def test_a_specific_family_still_counts_as_a_signal() -> None:
+    """Only catch-all buckets are discounted; real families still select."""
+    assert _classify(
+        _finding("USN-1234-1 : openssl vulnerabilities",
+                 "Ubuntu Local Security Checks", port=0, service="", severity=3)
+    ) == "patch-local-check"
+
+
+def test_named_conditions_still_beat_the_generic_bucket() -> None:
+    assert _classify(
+        _finding("SSL Certificate Cannot Be Trusted", "General")
+    ) == "tls-certificate"

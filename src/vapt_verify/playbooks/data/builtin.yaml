@@ -1,0 +1,129 @@
+# Built-in verification playbooks (declarative -- no executable content).
+#
+# A recipe says WHAT evidence settles a class of finding. A playbook says in
+# what ORDER to gather it, and WHEN a later step is worth running at all.
+#
+# Conditions are structured records, never expression strings:
+#   when:
+#     - {observation: connected, operator: is_true}
+#     - {observation: protocol, operator: contains, value: "TLSv1."}
+#
+# Operators: is_true, is_false, equals, not_equals, contains, not_contains,
+#            exists, missing, in, greater_than, less_than
+#
+# Rules the loader enforces (vapt-verify playbook validate):
+#   * every adapter must be registered;
+#   * a condition may only read observations an EARLIER step declares;
+#   * the first step may not be conditional;
+#   * step ids must be unique within a playbook.
+#
+# A step whose condition is false is SKIPPED WITH A RECORDED REASON. It is not
+# dropped: a playbook run still accounts for every step it declared.
+playbooks:
+  - playbook_id: tls-certificate-chain
+    version: "1"
+    title: TLS certificate and protocol assessment
+    description: >-
+      Establish a handshake first, then spend the expensive protocol/cipher
+      enumeration only on hosts that actually negotiated TLS.
+    families: ["tls_certificate"]
+    recipe_ids: ["tls-certificate", "tls-protocol-cipher"]
+    steps:
+      - step_id: reachability
+        adapter: tcp
+        description: Confirm the port answers before spending time on a handshake.
+      - step_id: handshake
+        adapter: openssl
+        description: Retrieve the presented certificate using SNI.
+        params: {command: s_client, servername_from: vhost}
+        when:
+          - {observation: port_open, operator: is_true}
+      - step_id: protocol-survey
+        adapter: testssl
+        description: >-
+          Full protocol and cipher assessment. Only worth running once a
+          handshake has succeeded; against a closed port it produces nothing an
+          operator can interpret.
+        optional: true
+        when:
+          - {observation: connected, operator: is_true, from_step: handshake}
+      - step_id: supporting-scan
+        adapter: nmap
+        description: ssl-cert as supporting evidence only.
+        params: {scripts: [ssl-cert]}
+        optional: true
+        when:
+          - {observation: port_open, operator: is_true}
+    notes:
+      - "Nmap is supporting evidence here; it never settles a certificate condition."
+      - "A refused connection is not evidence the certificate is sound."
+
+  - playbook_id: ssh-algorithms
+    version: "1"
+    title: SSH algorithm and configuration survey
+    description: >-
+      Confirm SSH answers, then enumerate offered algorithms with the dedicated
+      tool, falling back to the Nmap script as supporting evidence.
+    families: ["ssh"]
+    recipe_ids: ["ssh-weak-algorithms", "ssh-terrapin"]
+    steps:
+      - step_id: reachability
+        adapter: tcp
+        description: Confirm the SSH port answers.
+      - step_id: algorithms
+        adapter: ssh_audit
+        description: Enumerate offered algorithms, MACs and key exchanges.
+        when:
+          - {observation: port_open, operator: is_true}
+      - step_id: supporting-scan
+        adapter: nmap
+        description: ssh2-enum-algos as supporting evidence.
+        params: {scripts: [ssh2-enum-algos]}
+        optional: true
+        when:
+          - {observation: port_open, operator: is_true}
+    notes:
+      - "An unreachable port is not evidence the weak algorithm was removed."
+
+  - playbook_id: http-headers
+    version: "1"
+    title: HTTP response header inspection
+    description: >-
+      Fetch response headers with the correct Host/SNI once the port is known to
+      answer.
+    families: ["http_web"]
+    recipe_ids: ["http-security-headers"]
+    steps:
+      - step_id: reachability
+        adapter: tcp
+        description: Confirm the web port answers.
+      - step_id: headers
+        adapter: http
+        description: Capture response headers with the correct Host header.
+        params: {method: HEAD}
+        when:
+          - {observation: port_open, operator: is_true}
+    notes:
+      - "Header presence is evidence of configuration, not of exploitability."
+
+  - playbook_id: port-exposure
+    version: "1"
+    title: Basic port and service exposure
+    description: >-
+      Confirm reachability, then identify the service only where something
+      actually answered.
+    families: ["port_service_exposure"]
+    recipe_ids: ["port-service-exposure"]
+    steps:
+      - step_id: reachability
+        adapter: tcp
+        description: TCP connect check from the validation source.
+      - step_id: service-detection
+        adapter: nmap
+        description: Service and version detection.
+        params: {service_detection: true}
+        optional: true
+        when:
+          - {observation: port_open, operator: is_true}
+    notes:
+      - "Reachability proves exposure, never the vulnerability itself."

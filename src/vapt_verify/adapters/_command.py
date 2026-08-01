@@ -17,6 +17,7 @@ class SimpleCommandAdapter(Adapter):
     """
 
     safety_class = SafetyClass.ACTIVE_NONINTRUSIVE
+    produces_observations = ("output_lines", "exit_code", "timed_out")
 
     def parse(self, ctx: ExecutionContext, raw: RawResult) -> ParsedResult:
         if raw.timed_out:

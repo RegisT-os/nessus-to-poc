@@ -24,6 +24,19 @@ from vapt_verify.models.recipe import (
 )
 from vapt_verify.recipes.library import RecipeLibrary
 
+#: Nessus plugin families that are catch-all buckets, not evidence of anything.
+#: "General" and "Misc." between them hold a large share of a typical scan, so
+#: letting a recipe qualify because a finding landed in one routes ordinary
+#: findings to whatever specialised recipe happens to list that bucket.
+GENERIC_PLUGIN_FAMILIES = {
+    "general",
+    "misc.",
+    "misc",
+    "settings",
+    "service detection",
+    "port scanners",
+}
+
 
 class Classifier:
     def __init__(self, library: RecipeLibrary, capabilities: Capabilities | None = None) -> None:
@@ -103,8 +116,11 @@ class Classifier:
         text_hit = bool(recipe.text_indicators) and any(
             ind.lower() in text for ind in recipe.text_indicators
         )
+        # A catch-all family is never a signal, whichever recipe lists it.
         family_hit = bool(recipe.plugin_families and fam) and any(
-            pf.lower() in fam or fam in pf.lower() for pf in recipe.plugin_families
+            (pf.lower() in fam or fam in pf.lower())
+            and pf.lower() not in GENERIC_PLUGIN_FAMILIES
+            for pf in recipe.plugin_families
         )
         service_hit = bool(recipe.services and finding.service) and (
             finding.service.lower() in {s.lower() for s in recipe.services}
@@ -144,7 +160,15 @@ class Classifier:
         if text_hit:
             score += 20
         if family_hit:
-            score += 20
+            if score > 0:
+                score += 20  # family corroborates an indicator hit
+            elif not has_specific_signal:
+                score += 20  # a family-defined recipe qualifies by family alone
+            # else: the recipe declares name/plugin/text signals that did NOT
+            # hit. Family alone must not qualify it -- the same rule as for
+            # service below. Without this, a specialised recipe listing a broad
+            # family (vmware-hypervisor-advisory lists "Misc."/"General") wins
+            # at its low selection layer and owns every finding in that bucket.
         if service_hit:
             if score > 0:
                 score += 15  # service corroborates an indicator hit

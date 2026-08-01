@@ -114,6 +114,13 @@ class Adapter(ABC):
     capability: str = ""  # required external binary; "" means none needed
     kind: AdapterKind = AdapterKind.COMMAND
     safety_class: SafetyClass = SafetyClass.ACTIVE_NONINTRUSIVE
+    #: Observation keys this adapter's parser can produce. Playbook validation
+    #: uses these to reject a condition reading an observation nothing emits --
+    #: a typo there produces a step that silently never runs, which is
+    #: indistinguishable from one that simply never applies. An empty tuple
+    #: means "undeclared", and validation declines to guess rather than warn
+    #: falsely.
+    produces_observations: tuple[str, ...] = ()
 
     def build_argv(self, ctx: ExecutionContext) -> list[str]:
         raise NotImplementedError(f"{self.name} is not a command adapter")

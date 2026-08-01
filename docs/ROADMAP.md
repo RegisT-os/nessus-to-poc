@@ -4,7 +4,7 @@
 
 Three horizons:
 
-- **Delivered (v0.1 → v2.4)** — shipped, tested, merged. Recorded here so
+- **Delivered (v0.1 → v2.5)** — shipped, tested, merged. Recorded here so
   the history of *why* each capability exists is not lost.
 - **Planned majors (v3.0 → v10.0)** — each is a coherent capability step, broken
   into numbered slices with deliverables, guardrails and acceptance criteria.
@@ -183,6 +183,28 @@ every imported finding and names the selection separately; every generated
 artefact states how many findings it left out and that they still require a
 disposition. Criteria are OR'd, because operators think additively.
 
+## v2.5 — Playbooks & Classification Correctness ✅
+
+*Theme: order the evidence gathering, and stop routing ordinary findings to the
+wrong recipe.*
+
+Delivers roadmap slice **v3.1 (Playbooks)** ahead of the rest of v3.0, plus a
+classification defect found while building it.
+
+**The defect.** `vmware-hypervisor-advisory` lists plugin families `Misc.` and
+`General` alongside its VMware/ESXi name indicators. Family alone qualified a
+recipe, and because that recipe sits at selection layer 2 it beat every
+layer-3/4 recipe — so *every* finding in those two buckets was routed to manual
+hypervisor evidence. "General" and "Misc." carry a large share of a real Nessus
+scan, so an ordinary HTTP finding was being handed an administrative VMware
+evidence request instead of an HTTP check.
+
+The fix has two parts, both generalisations of a rule the classifier already
+applied to `services`: catch-all families are never a signal for any recipe,
+and a recipe that declares name/plugin/text signals may not qualify on family
+alone. A genuine VMware advisory still selects via its name indicator, and a
+genuine `Ubuntu Local Security Checks` family still selects the patch recipe.
+
 ---
 
 # Planned
@@ -196,9 +218,21 @@ any step ever acquiring the authority to decide a verdict.
 
 ### Slices
 
-- **v3.1 — Playbooks.** Declarative, ordered adapter pipelines per verification
-  family, with conditional steps (`if port_open`, `if tls_detected`). Same
-  no-executable-content rule as recipes. New: `playbook list|show|validate`.
+- **v3.1 — Playbooks.** ✅ **(delivered)** Declarative, ordered adapter
+  pipelines per verification family, with conditional steps. Same
+  no-executable-content rule as recipes: a condition is a structured record
+  (`observation` / `operator` / `value` / `from_step`), never an expression
+  string, so a YAML file cannot name a callable or reach anything beyond
+  earlier steps' observations. Eleven total operators, every one of which
+  returns a bool for any input — a condition can never raise mid-run and
+  orphan a half-written evidence file. An absent observation satisfies no
+  value comparison, `not_equals` included: absence is unknown, not inequality.
+  Validation is load-time and catches the failure mode playbooks invite — a
+  condition that can never fire (typo'd observation, forward reference to a
+  later step, conditional first step) is indistinguishable at run time from a
+  step that legitimately does not apply. Adapters now declare
+  `produces_observations` so that check has something to check against.
+  New: `playbook list|show|validate`.
 - **v3.2 — Scheduler & safety governors.** Bounded concurrency with per-host,
   per-adapter and per-engagement limits; token-bucket rate limiting; testing-
   window enforcement; graceful operator interrupt that never leaves a half-

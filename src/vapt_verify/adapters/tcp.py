@@ -24,6 +24,7 @@ class TcpConnectAdapter(Adapter):
     capability = ""  # pure Python
     kind = AdapterKind.INPROCESS
     safety_class = SafetyClass.ACTIVE_NONINTRUSIVE
+    produces_observations = ("port_open",)
 
     def run_inprocess(self, ctx: ExecutionContext, connector: Connector) -> RawResult:
         is_open = connector.connect(ctx.target, ctx.port, ctx.timeout)
