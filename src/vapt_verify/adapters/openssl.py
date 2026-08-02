@@ -16,6 +16,11 @@ class OpensslAdapter(Adapter):
     name = "openssl"
     capability = "openssl"
     safety_class = SafetyClass.ACTIVE_NONINTRUSIVE
+    produces_observations = (
+        "connected", "verify_return_code", "verify_error", "peer_certificate",
+        "protocol", "cipher", "self_signed_indicated", "handshake_captured",
+        "timed_out",
+    )
 
     def build_argv(self, ctx: ExecutionContext) -> list[str]:
         argv = ["openssl", "s_client", "-connect", f"{ctx.target}:{ctx.port}"]

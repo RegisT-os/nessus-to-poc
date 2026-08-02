@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vapt-verify"
-version = "2.4.0"
+version = "2.5.0"
 description = "VAPT Verification Orchestrator — local-first, multi-engagement vulnerability verification and evidence orchestration platform."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -37,7 +37,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 # Recipes MUST ship with the package: without them, classification fails on any
 # non-editable install (see src/vapt_verify/recipes/library.py).
-vapt_verify = ["py.typed", "recipes/data/*.yaml"]
+vapt_verify = ["py.typed", "recipes/data/*.yaml", "playbooks/data/*.yaml"]
 
 # ---------------------------------------------------------------------------
 # Tooling configuration

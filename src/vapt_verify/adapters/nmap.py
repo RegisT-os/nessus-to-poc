@@ -16,6 +16,7 @@ class NmapAdapter(Adapter):
     name = "nmap"
     capability = "nmap"
     safety_class = SafetyClass.ACTIVE_NONINTRUSIVE
+    produces_observations = ("port_state", "exit_code", "timed_out")
 
     def build_argv(self, ctx: ExecutionContext) -> list[str]:
         scan_flag = "-sU" if ctx.transport == "udp" else "-sT"

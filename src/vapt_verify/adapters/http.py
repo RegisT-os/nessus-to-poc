@@ -15,6 +15,7 @@ class HttpAdapter(Adapter):
     name = "http"
     capability = "curl"
     safety_class = SafetyClass.ACTIVE_NONINTRUSIVE
+    produces_observations = ("headers", "status_line", "timed_out")
 
     def build_argv(self, ctx: ExecutionContext) -> list[str]:
         tls = bool(ctx.params.get("tls")) or ctx.port in {443, 8443}
