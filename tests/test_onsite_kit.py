@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from shell_probe import posix_shell
 from vapt_verify.cli.main import main
 from vapt_verify.importers.nessus_xml import NessusImporter
 from vapt_verify.kit import (
@@ -343,7 +344,8 @@ def test_out_of_scope_script_exits_without_running_the_tool(tmp_path: Path) -> N
     script = next((kit / "scripts").glob("*.sh"))
 
     proc = subprocess.run(
-        ["bash", str(script)], capture_output=True, text=True, timeout=30, check=False
+        [posix_shell("bash"), str(script)], capture_output=True, text=True, timeout=30,
+        check=False,
     )
     assert proc.returncode == 0
     assert "REFUSED (out of scope)" in proc.stdout

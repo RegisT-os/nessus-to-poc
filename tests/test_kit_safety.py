@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from nessus_builder import default_host_props, nessus_document, report_host, report_item
+from shell_probe import posix_shell
 from vapt_verify.adapters import get_adapter
 from vapt_verify.adapters.base import ExecutionContext
 from vapt_verify.cli.main import main
@@ -259,13 +260,14 @@ def test_hostile_target_never_becomes_a_command(tmp_path: Path, hostile: str) ->
 
 
 def test_quoting_survives_the_real_shell(scoped_ws: EngagementWorkspace, tmp_path: Path) -> None:
-    """Round-trip through /bin/sh's own parser, not through our assumptions."""
+    """Round-trip through the shell's own parser, not through our assumptions."""
     import shlex
 
+    shell = posix_shell("sh")
     for value in ["a; rm -rf /", "$(id)", "`id`", "a'b", "a b", "a\nb", "*"]:
         quoted = shlex.quote(value)
         out = subprocess.run(
-            ["/bin/sh", "-c", f"printf %s {quoted}"], capture_output=True, text=True, check=True
+            [shell, "-c", f"printf %s {quoted}"], capture_output=True, text=True, check=True
         )
         assert out.stdout == value
 
@@ -284,11 +286,12 @@ def test_every_generated_script_is_valid_bash(
 ) -> None:
     kit = tmp_path / "kit"
     OnsiteKitBuilder(scoped_ws).build(kit)
+    bash = posix_shell("bash")
     scripts = [kit / "run-all.sh", kit / "lib" / "capture.sh", *(kit / "scripts").glob("*.sh")]
     assert len(scripts) > 2
     for script in scripts:
         proc = subprocess.run(
-            ["bash", "-n", str(script)], capture_output=True, text=True, check=False
+            [bash, "-n", str(script)], capture_output=True, text=True, check=False
         )
         assert proc.returncode == 0, f"{script.name}: {proc.stderr}"
 
