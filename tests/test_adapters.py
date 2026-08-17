@@ -45,6 +45,26 @@ def test_sslscan_passes_sni_name() -> None:
     assert any(a.startswith("--sni-name=") for a in argv)
 
 
+def test_testssl_connects_to_the_ip_and_only_sends_the_vhost_as_a_name() -> None:
+    """A vhost is a name sent inside the connection, never the connect target.
+
+    Handing testssl.sh the hostname alone makes it resolve that name and connect
+    wherever DNS points -- which need not be the scope-approved address, nor the
+    host the scanner actually saw. `--ip` pins the socket while the URI supplies
+    SNI and the certificate name.
+    """
+    argv = get_adapter("testssl").build_argv(_ctx(params={"vhost": "web01.example-doc.test"}))
+    assert "--ip" in argv
+    assert argv[argv.index("--ip") + 1] == "192.0.2.10"
+    assert "web01.example-doc.test:443" in argv
+
+
+def test_testssl_without_a_vhost_targets_the_address_directly() -> None:
+    argv = get_adapter("testssl").build_argv(_ctx())
+    assert "192.0.2.10:443" in argv
+    assert "--ip" not in argv
+
+
 def test_ssh_audit_targets_port() -> None:
     argv = get_adapter("ssh_audit").build_argv(_ctx(port=22, transport="tcp"))
     assert argv[0] == "ssh-audit" and argv[-1] == "192.0.2.10"

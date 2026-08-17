@@ -72,7 +72,15 @@ class KitStep:
     safety_class: str
     nmap_role: str
     command_args: list[str] = field(default_factory=list)
+    #: What in the captured output would confirm the scanner's claim.
     expected_evidence: list[str] = field(default_factory=list)
+    #: What would *contradict* it. Carried because the alternative is an
+    #: operator reading "no output" as "not vulnerable" -- an inference this
+    #: tool must never invite. Absence of the confirming signal is only
+    #: meaningful if the operator knows what refutation actually looks like.
+    refuting_evidence: list[str] = field(default_factory=list)
+    #: Conditions under which the capture proves nothing either way.
+    inconclusive_conditions: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
     #: Authorisation status of this step's target, as the engagement declares it.
     #: Generating a command is not running it, so scope does not *suppress* a
@@ -110,6 +118,8 @@ class KitStep:
             "command_args": self.command_args,
             "command": shlex.join(self.command_args) if self.command_args else "",
             "expected_evidence": self.expected_evidence,
+            "refuting_evidence": self.refuting_evidence,
+            "inconclusive_conditions": self.inconclusive_conditions,
             "limitations": self.limitations,
             "executable": self.executable,
             "scope_status": self.scope_status,
@@ -365,6 +375,8 @@ class OnsiteKitBuilder:
                     nmap_role=recipe.nmap_role.value,
                     command_args=command_args,
                     expected_evidence=list(recipe.positive_evidence),
+                    refuting_evidence=list(recipe.negative_evidence),
+                    inconclusive_conditions=list(recipe.inconclusive_conditions),
                     limitations=list(recipe.known_limitations),
                     scope_status=scope_status,
                     scope_reason=scope_reason,
@@ -393,6 +405,8 @@ class OnsiteKitBuilder:
                     scope_status=scope_status,
                     scope_reason=scope_reason,
                     expected_evidence=list(recipe.positive_evidence),
+                    refuting_evidence=list(recipe.negative_evidence),
+                    inconclusive_conditions=list(recipe.inconclusive_conditions),
                     limitations=list(recipe.known_limitations),
                 )
             )
@@ -553,12 +567,32 @@ requests in `commands.md` and attach the resulting evidence separately if needed
                     lines.extend(
                         ["**Manual evidence required; no remote command is generated.**", ""]
                     )
-                for expected in step.expected_evidence:
-                    lines.append(f"- Confirming evidence: {expected}")
-                for limitation in step.limitations:
-                    lines.append(f"- Limitation: {limitation}")
-                if step.expected_evidence or step.limitations:
+                # Confirming and refuting evidence are listed together and
+                # deliberately in that order. An operator who only knows what
+                # confirms a finding will read an empty capture as a refutation,
+                # which is the single inference this tool exists to prevent.
+                for label, values in (
+                    ("Confirms the finding", step.expected_evidence),
+                    ("Contradicts the finding", step.refuting_evidence),
+                    ("Inconclusive if", step.inconclusive_conditions),
+                    ("Known limitation", step.limitations),
+                ):
+                    for value in values:
+                        lines.append(f"- {label}: {value}")
+                if (
+                    step.expected_evidence
+                    or step.refuting_evidence
+                    or step.inconclusive_conditions
+                    or step.limitations
+                ):
                     lines.append("")
+                if step.expected_evidence and not step.refuting_evidence:
+                    lines.extend([
+                        "- Contradicts the finding: this recipe declares no refuting "
+                        "signal, so an absent confirmation is **inconclusive**, not a "
+                        "clean result. Record it as needing review.",
+                        "",
+                    ])
 
         if retained:
             lines.extend([

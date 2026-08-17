@@ -13,7 +13,13 @@ class TestsslAdapter(SimpleCommandAdapter):
     def build_argv(self, ctx: ExecutionContext) -> list[str]:
         argv = ["testssl.sh", "--warnings", "batch", "--quiet"]
         vhost = ctx.params.get("vhost") or ctx.params.get("servername")
-        target = f"{vhost}" if vhost else ctx.target
-        # Connect to the IP but present the vhost via URI when known.
-        argv.append(f"{ctx.target}:{ctx.port}" if not vhost else f"{target}:{ctx.port}")
+        if vhost:
+            # `--ip` pins the socket to the scope-checked address while the URI
+            # supplies the SNI and certificate name. Passing the vhost alone
+            # would resolve it via DNS and connect wherever that points -- which
+            # is not the host the engagement authorised, and not necessarily the
+            # host the scanner saw.
+            argv += ["--ip", ctx.target, f"{vhost}:{ctx.port}"]
+        else:
+            argv.append(f"{ctx.target}:{ctx.port}")
         return argv
