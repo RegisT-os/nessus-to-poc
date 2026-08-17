@@ -27,7 +27,7 @@ def is_valid_target(value: str) -> bool:
     """Is ``value`` a syntactically valid IP address or hostname?
 
     Shape validation only -- it says nothing about authorisation. It exists so
-    that callers which *render* a target (the runbook generator) can refuse a
+    that callers which *render* a target (the kit generator) can refuse a
     mangled scanner field before it ever reaches a shell script, using exactly
     the same rule the scope enforcer applies before execution.
     """

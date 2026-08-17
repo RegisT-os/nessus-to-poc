@@ -134,8 +134,8 @@ are preserved.
 ## Pick which findings to convert
 
 A 200-finding scan rarely needs 200 sets of capture scripts. `select` chooses
-which findings get them, and `prepare`, `kit build` and `runbook` all honour
-that choice automatically.
+which findings get them, and `prepare`, `kit build` and `poc export` all
+honour that choice automatically.
 
 Interactive (the default — a numbered list you tick):
 
@@ -170,9 +170,9 @@ single command rather than an empty result.
 
 **Deselecting is scoping, not deleting.** A deselected finding stays in the
 engagement, is not a false positive, and still needs a disposition. Every
-generated kit, runbook and script states how many findings were left out, and
+generated kit and script states how many findings were left out, and
 `vapt-verify coverage` still reports against every imported finding. Pass
-`--all-findings` to `kit build` or `runbook` to ignore the selection once.
+`--all-findings` to `kit build` to ignore the selection once.
 
 ## Informational findings are not scanned
 
@@ -181,8 +181,8 @@ confirm, so no validation script is generated for them. They are **not
 dropped**: they stay in the engagement, they are listed in `commands.md` under
 "Retained, not scanned", and they still need a disposition at review time.
 
-Add `--include-informational` to `prepare`, `kit build` or `runbook` to
-generate commands for them anyway. `poc export --skip-informational` omits them
+Add `--include-informational` to `prepare` or `kit build` to generate commands
+for them anyway. `poc export --skip-informational` omits them
 from the exported pack.
 
 ## File names
@@ -218,7 +218,6 @@ readable name, e.g. `./run-all.sh --finding SSL-Self-Signed`.
 The normal operator workflow is fully covered above. These documents are only
 needed when changing or auditing the platform itself:
 
-- [`docs/RUNBOOK.md`](docs/RUNBOOK.md) - the `runbook` / `evidence import` variant of this flow
 - [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) - verdict and evidence rules
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - internal modules and data flow
 - [`docs/SECURITY.md`](docs/SECURITY.md) - client-data and execution safeguards

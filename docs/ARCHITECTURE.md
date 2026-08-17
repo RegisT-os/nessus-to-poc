@@ -43,12 +43,8 @@ src/vapt_verify/
 │   └── data/builtin.yaml    #   shipped playbooks
 ├── adapters/                # (v0.3+) nmap, tcp, openssl, http, manual, ...
 ├── execution/               # (v0.3) dry-run-by-default runner, scope enforcement
-├── runbook/                 # (v2.3) commands the operator runs by hand
-│   ├── models.py            #   Runbook / entry / command / manual task + coverage
-│   ├── builder.py           #   findings -> argv via the same Adapter.build_argv
-│   ├── render.py            #   bash / powershell / markdown / json manifest
-│   └── ingest.py            #   captured output -> hashed, parsed evidence
-├── kit.py                   # (v2.3) portable Kali validation kit + evidence import
+├── kit.py                   # (v2.6) the single generator: Kali validation kit
+│                            #   + scope labelling + evidence import
 ├── review/                  # (v0.6) reviewer workflow, false-positive approval
 ├── reporting/               # (v0.7) markdown/json/csv/coverage
 ├── naming.py                # human-readable export file/directory names

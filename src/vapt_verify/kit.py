@@ -151,6 +151,16 @@ class EvidenceImportSummary:
     imported: int = 0
     skipped_duplicates: int = 0
     errors: list[str] = field(default_factory=list)
+    #: Findings the kit asked about that came back with no evidence at all.
+    #:
+    #: Reported by name rather than counted, because a silent import summary is
+    #: how a finding disappears: the operator sees "imported: 4", assumes the
+    #: work is done, and never learns the other eleven are still bare. Missing
+    #: evidence is not a false positive -- these still need a disposition.
+    findings_without_evidence: list[str] = field(default_factory=list)
+    #: Steps the kit could not turn into a command, so no capture can ever
+    #: arrive for them. They need the operator to do the work by hand.
+    outstanding_manual_steps: list[str] = field(default_factory=list)
 
 
 class OnsiteKitBuilder:
@@ -670,7 +680,43 @@ class OnsiteEvidenceImporter:
                 )
             except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
                 summary.errors.append(f"{metadata_path.name}: {exc}")
+
+        self._report_gaps(manifest, summary)
         return summary
+
+    def _report_gaps(
+        self, manifest: dict[str, Any], summary: EvidenceImportSummary
+    ) -> None:
+        """Name what the kit asked about but came back empty.
+
+        The import counts alone would let an operator conclude the round trip
+        is finished while most findings are still bare.
+        """
+        steps = manifest.get("steps", [])
+        if not isinstance(steps, list):
+            return
+        with_evidence = {
+            str(record.get("finding_id", "")) for record in self.ws.load_evidence()
+        }
+        expected: list[str] = []
+        manual: list[str] = []
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            finding_id = str(step.get("finding_id", ""))
+            if not finding_id:
+                continue
+            if finding_id not in expected:
+                expected.append(finding_id)
+            if not step.get("executable"):
+                title = str(step.get("title", "")) or finding_id
+                entry = f"{finding_id} ({title}): {step.get('description', '')}".strip()
+                if entry not in manual:
+                    manual.append(entry)
+        # Informational findings deliberately have no step, so they are not
+        # counted here -- commands.md carries them under "Retained, not scanned".
+        summary.findings_without_evidence = [f for f in expected if f not in with_evidence]
+        summary.outstanding_manual_steps = manual
 
     def _import_one(
         self,

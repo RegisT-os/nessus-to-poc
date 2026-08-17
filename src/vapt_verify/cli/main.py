@@ -620,7 +620,11 @@ def cmd_kit_build(args: argparse.Namespace) -> int:
     output = Path(args.output) if args.output else (ws.root / "kali-kit")
     from vapt_verify.selection import Selection
 
-    selection = None if args.all_findings else Selection.load(ws.root)
+    selection = Selection.load(ws.root)
+    if selection is not None and args.all_findings:
+        print(f"A selection of {selection.count}/{selection.total_findings} finding(s) "
+              "exists but --all-findings was passed; covering everything.")
+        selection = None
     if selection is not None:
         print(f"Using saved selection: {selection.count} of {selection.total_findings} "
               f"finding(s) ({selection.method}, by {selection.operator}).")
@@ -679,8 +683,29 @@ def cmd_kit_import(args: argparse.Namespace) -> int:
         print(f"Skipped duplicate captures:      {summary.skipped_duplicates}")
     for error in summary.errors:
         print(f"error: {error}")
+
+    if summary.outstanding_manual_steps:
+        print(f"\n  manual evidence still outstanding: "
+              f"{len(summary.outstanding_manual_steps)}")
+        for entry in summary.outstanding_manual_steps[:10]:
+            print(f"    - {entry}")
+        if len(summary.outstanding_manual_steps) > 10:
+            print(f"    ... and {len(summary.outstanding_manual_steps) - 10} more")
+
+    if summary.findings_without_evidence:
+        print(f"\n  findings still with NO evidence: "
+              f"{len(summary.findings_without_evidence)}")
+        print("    These remain in the inventory and still require a disposition;")
+        print("    missing evidence is never a false positive.")
+        for finding_id in summary.findings_without_evidence[:10]:
+            print(f"    - {finding_id}")
+        if len(summary.findings_without_evidence) > 10:
+            print(f"    ... and {len(summary.findings_without_evidence) - 10} more")
+
     if summary.imported:
-        print("Next: review the findings, then run 'vapt-verify poc export'.")
+        print("\nNOTE: no verdict was set. Evidence records what a tool observed; a "
+              "reviewer decides what it means.")
+        print("Next: vapt-verify review --finding <id> ...   then   vapt-verify poc export")
     return 1 if summary.errors else 0
 
 
@@ -942,9 +967,8 @@ def cmd_select(args: argparse.Namespace) -> int:
     })
     _print_selection(selection, rows)
     print("\nNext:")
-    print(f"  vapt-verify runbook   --engagement {args.engagement}")
     print(f"  vapt-verify kit build --engagement {args.engagement} --output <dir>")
-    print("Both use this selection automatically; pass --all-findings to ignore it.")
+    print("It uses this selection automatically; pass --all-findings to ignore it.")
     return 0
 
 
@@ -996,200 +1020,6 @@ def _apply_selection(
         print(f"  {selection.deselected_count} deselected finding(s) are excluded from this "
               f"{label}; they remain in the engagement and still need a disposition.")
     return filtered
-
-
-def cmd_runbook(args: argparse.Namespace) -> int:
-    """Generate the commands the operator runs by hand to capture evidence."""
-    from vapt_verify.runbook.builder import RunbookBuilder
-    from vapt_verify.runbook.render import to_json, to_markdown, to_powershell, to_shell
-
-    ws, err = _load_ws(args)
-    if ws is None:
-        return err
-
-    rows = ws.load_findings()
-    if args.finding:
-        rows = [r for r in rows if r["finding_id"] == args.finding]
-    if args.asset:
-        rows = [r for r in rows if r["asset_id"] == args.asset]
-    if args.severity:
-        wanted = {s.strip().upper() for s in args.severity.split(",") if s.strip()}
-        rows = [r for r in rows if str(r.get("severity_label", "")).upper() in wanted]
-    if not rows:
-        print("No matching findings. (Import a scan first, or relax the filters.)")
-        return 2
-    rows = _apply_selection(ws, rows, all_findings=args.all_findings, label="runbook")
-    if not rows:
-        print("The saved selection matches none of these findings.")
-        print(f"Review it with: vapt-verify select --engagement {args.engagement} --show")
-        return 2
-
-    builder = RunbookBuilder(
-        capabilities=Capabilities.detect(),
-        default_timeout=int(args.timeout),
-        capture_dir=args.capture_dir,
-    )
-    runbook = builder.build(
-        engagement=ws.engagement(),
-        findings=rows,
-        assets=ws.load_assets(),
-        include_informational=args.include_informational,
-    )
-    from vapt_verify.selection import Selection
-
-    active = None if args.all_findings else Selection.load(ws.root)
-    if active is not None and active.deselected_count:
-        runbook.selection_summary = active.summary()
-
-    out_dir = Path(args.output) if args.output else (ws.root / "runbooks")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    renderers = {
-        "sh": ("runbook.sh", to_shell),
-        "ps1": ("runbook.ps1", to_powershell),
-        "md": ("runbook.md", to_markdown),
-        "json": ("runbook.json", to_json),
-    }
-    formats = list(renderers) if args.format == "all" else [args.format]
-    # The JSON manifest is what `evidence import` reads back, so it is always
-    # written: a runbook you cannot re-import is only half a workflow.
-    if "json" not in formats:
-        formats.append("json")
-
-    written: list[Path] = []
-    for fmt in formats:
-        filename, render = renderers[fmt]
-        path = out_dir / filename
-        path.write_text(render(runbook), encoding="utf-8")
-        if fmt == "sh":
-            _make_executable(path)
-        written.append(path)
-
-    coverage = runbook.coverage(findings_considered=len(rows))
-    commands = runbook.commands
-    runnable = [c for c in commands if c.runnable]
-    blocked = [c for c in commands if not c.runnable and c.argv]
-    print(f"Runbook for engagement '{args.engagement}':")
-    print(f"  findings covered:       {coverage.entries} of {len(rows)}")
-    print(f"  with runnable commands: {coverage.with_runnable_command}")
-    print(f"  manual-only findings:   {coverage.manual_only}")
-    if coverage.retained_only:
-        print(f"  informational retained: {coverage.retained_only} "
-              "(listed, not scanned; --include-informational to probe)")
-    print(f"  commands generated:     {len(commands)} "
-          f"({len(runnable)} runnable, {len(blocked)} withheld)")
-    print(f"  manual evidence tasks:  {len(runbook.manual_tasks)}")
-    if not runbook.scope_configured:
-        print("  scope:                  NOT CONFIGURED - commands are generated but the tool")
-        print("                          cannot confirm authorisation. Confirm before running.")
-    elif blocked:
-        print(f"  scope:                  {len(blocked)} command(s) target hosts outside the")
-        print("                          approved scope; they are commented out, not deleted.")
-    missing = [t for t in runbook.required_tools() if not shutil.which(t)]
-    if missing:
-        print(f"  tools missing here:     {', '.join(missing)}")
-        print("                          (fine - run the script where the tools are installed)")
-    if not coverage.is_complete:
-        print(f"ERROR: {len(coverage.unaccounted)} finding(s) produced neither a command nor a "
-              "manual task: " + ", ".join(coverage.unaccounted[:10]))
-        return 1
-
-    for path in written:
-        print(f"  wrote {path}")
-    print("\nNext:")
-    print(f"  1. Review {out_dir / 'runbook.md'} and confirm every target is authorised.")
-    print("  2. Run the script where the targets are reachable:")
-    print(f"       bash {out_dir / 'runbook.sh'}          (Kali/Linux)")
-    print(f"       powershell -File {out_dir / 'runbook.ps1'}   (Windows)")
-    print("  3. Bring the capture directory back and import it:")
-    print(f"       vapt-verify evidence import --engagement {args.engagement} \\")
-    print(f"         --manifest {out_dir / 'runbook.json'} --capture-dir <capture-dir>")
-    ws.append_audit_event({
-        "event": "runbook",
-        "findings": len(rows),
-        "commands": len(commands),
-        "runnable_commands": len(runnable),
-        "manual_tasks": len(runbook.manual_tasks),
-        "scope_configured": runbook.scope_configured,
-    })
-    return 0
-
-
-def _make_executable(path: Path) -> None:
-    """Best-effort chmod +x; a no-op on filesystems that do not support it."""
-    import stat
-
-    try:
-        mode = path.stat().st_mode
-        path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    except OSError:
-        pass
-
-
-def cmd_evidence_import(args: argparse.Namespace) -> int:
-    """Import manually captured tool output listed in a runbook manifest."""
-    import json as _json
-
-    from vapt_verify.runbook.ingest import IngestStatus, RunbookIngestor
-    from vapt_verify.runbook.models import Runbook
-
-    ws, err = _load_ws(args)
-    if ws is None:
-        return err
-
-    manifest = Path(args.manifest) if args.manifest else (ws.root / "runbooks" / "runbook.json")
-    if not manifest.exists():
-        print(f"error: runbook manifest not found: {manifest}")
-        print("Generate one first with: vapt-verify runbook --engagement "
-              f"{args.engagement}")
-        return 2
-    runbook = Runbook.from_dict(_json.loads(manifest.read_text(encoding="utf-8")))
-
-    capture_dir = Path(args.capture_dir) if args.capture_dir else Path(runbook.capture_dir)
-    if not capture_dir.exists():
-        print(f"error: capture directory not found: {capture_dir}")
-        return 2
-
-    report = RunbookIngestor(ws, operator=args.operator).ingest(
-        runbook=runbook, capture_dir=capture_dir, engagement_id=args.engagement
-    )
-    counts = report.counts
-    print(f"Imported captures from {capture_dir}/ (manifest {manifest.name}):")
-    print(f"  imported:          {counts['imported']}")
-    print(f"  already imported:  {counts['already_imported']}")
-    print(f"  not captured yet:  {counts['not_captured']}")
-    print(f"  tool skipped:      {counts['tool_skipped']}")
-    print(f"  empty captures:    {counts['empty_capture']}")
-
-    for item in report.of_status(IngestStatus.IMPORTED):
-        verdict = item.suggested_verdict or "(none - reviewer decides)"
-        print(f"    + {item.finding_id} [{item.adapter}] sha256 {item.sha256[:12]} "
-              f"suggested={verdict}")
-    for item in report.of_status(IngestStatus.TOOL_SKIPPED):
-        print(f"    ! {item.finding_id} [{item.adapter}] {item.note}")
-    for item in report.of_status(IngestStatus.EMPTY_CAPTURE):
-        print(f"    ! {item.finding_id} [{item.adapter}] {item.note}")
-
-    if args.show_outstanding:
-        for item in report.of_status(IngestStatus.NOT_CAPTURED):
-            print(f"    - {item.step_id} not captured yet -> {item.source_path}")
-
-    if report.outstanding_manual_tasks:
-        print(f"\n  manual evidence still outstanding: {len(report.outstanding_manual_tasks)}")
-        for task in report.outstanding_manual_tasks[:10]:
-            print(f"    - {task}")
-    if report.findings_without_evidence:
-        print(f"\n  findings still with NO evidence: {len(report.findings_without_evidence)}")
-        print("    These remain in the inventory and still require a disposition; missing")
-        print("    evidence is never a false positive.")
-        for finding_id in report.findings_without_evidence[:10]:
-            print(f"    - {finding_id}")
-        if len(report.findings_without_evidence) > 10:
-            print(f"    ... and {len(report.findings_without_evidence) - 10} more")
-
-    print("\nNOTE: no verdict was set. Suggested verdicts come from the evidence content,")
-    print("      never from an exit code; review each finding to record a decision.")
-    print("Next: vapt-verify review --finding <id> ...   then   vapt-verify poc export")
-    return 0
 
 
 def cmd_profile_show(args: argparse.Namespace) -> int:
@@ -1993,33 +1823,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_select.add_argument("--operator", default="unknown")
     p_select.set_defaults(func=cmd_select)
 
-    p_runbook = sub.add_parser(
-        "runbook",
-        help="generate the commands to run by hand to capture evidence (nmap/openssl/...)",
-    )
-    add_base(p_runbook)
-    add_engagement(p_runbook)
-    p_runbook.add_argument("--finding", default="", help="limit to one finding id")
-    p_runbook.add_argument("--asset", default="", help="limit to one asset id")
-    p_runbook.add_argument("--severity", default="",
-                           help="comma-separated severity labels to include")
-    p_runbook.add_argument("--format", choices=["sh", "ps1", "md", "json", "all"], default="all",
-                           help="output format (json is always written for re-import)")
-    p_runbook.add_argument("--output", default="", help="output directory")
-    p_runbook.add_argument("--capture-dir", default="capture",
-                           help="directory the generated script writes its output into")
-    p_runbook.add_argument("--timeout", type=int, default=120,
-                           help="per-step timeout recorded in the runbook")
-    p_runbook.add_argument(
-        "--all-findings", action="store_true",
-        help="ignore any saved selection and cover every finding",
-    )
-    p_runbook.add_argument(
-        "--include-informational", action="store_true",
-        help="also generate scanning commands for informational findings "
-             "(default: list them, do not probe them)",
-    )
-    p_runbook.set_defaults(func=cmd_runbook)
     p_kit = sub.add_parser("kit", help="build a Kali kit or import its returned evidence")
     kit_sub = p_kit.add_subparsers(dest="kit_command", required=True)
     p_kit_build = kit_sub.add_parser("build", help="generate Kali Bash validation scripts")
@@ -2064,19 +1867,6 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev_add.add_argument("--note", default="")
     p_ev_add.add_argument("--operator", default="unknown")
     p_ev_add.set_defaults(func=cmd_evidence_add)
-    p_ev_import = ev_sub.add_parser(
-        "import", help="import output captured by running a generated runbook"
-    )
-    add_base(p_ev_import)
-    add_engagement(p_ev_import)
-    p_ev_import.add_argument("--manifest", default="",
-                             help="runbook.json produced by 'vapt-verify runbook'")
-    p_ev_import.add_argument("--capture-dir", default="",
-                             help="directory holding the captured output files")
-    p_ev_import.add_argument("--operator", default="unknown")
-    p_ev_import.add_argument("--show-outstanding", action="store_true",
-                             help="list every step that has no capture yet")
-    p_ev_import.set_defaults(func=cmd_evidence_import)
     p_ev_verify = ev_sub.add_parser(
         "verify", help="re-hash stored evidence against recorded SHA-256 (chain of custody)"
     )

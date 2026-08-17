@@ -173,8 +173,8 @@ never lets it look like a deletion.*
 
 `select` picks which findings become capture scripts -- interactively, or by
 severity / host / plugin / service / port / free text / explicit id, with
-`--add` and `--remove` to refine. `runbook`, `kit build` and `prepare` honour
-the saved selection automatically; `--all-findings` overrides it.
+`--add` and `--remove` to refine. `kit build`, `prepare` and `poc export`
+honour the saved selection automatically; `--all-findings` overrides it.
 
 The guardrail that makes this safe to have at all: a selection is a **scoping
 decision, not a deletion**. Deselected findings stay in the inventory, acquire
@@ -204,6 +204,46 @@ applied to `services`: catch-all families are never a signal for any recipe,
 and a recipe that declares name/plugin/text signals may not qualify on family
 alone. A genuine VMware advisory still selects via its name indicator, and a
 genuine `Ubuntu Local Security Checks` family still selects the patch recipe.
+
+## v2.6 — One Generator ✅
+
+*Theme: two ways to do the same thing is one way too many, and the weaker one
+was the front door.*
+
+v2.3 shipped `runbook` (bash / PowerShell / markdown / JSON) and v2.3 also
+shipped `kit build` (a portable Kali directory). Both turned findings into
+commands via `Adapter.build_argv`; both took captured output back. Keeping both
+meant every safety property had to be implemented, tested and remembered twice —
+and it had not been. The README pointed operators at `kit`, which was the one
+missing the safety work.
+
+`kit` survives, because it is the shape operators actually use: a directory you
+copy to Kali, run, and copy back, with per-step scripts named for what they
+check. Everything the runbook was the sole enforcer of moved onto it first:
+
+- **Scope labelling.** `kit build` emitted a runnable script for any host string
+  the scanner reported — no scope check, no address validation. Ported, with the
+  labels-never-suppresses rule intact: an out-of-scope script is still written
+  and still readable, but refuses to run without `VAPT_ALLOW_OUT_OF_SCOPE=1`.
+- **Target validation.** A scan field that is not a valid IP or hostname now
+  produces no command at all; it becomes a manual task carrying the reason.
+- **What refutes, not only what confirms.** The kit listed a recipe's positive
+  evidence and dropped `negative_evidence` and `inconclusive_conditions`
+  entirely. An operator told only what confirmation looks like will read an
+  empty capture as a refutation. Both are now carried, and a recipe declaring no
+  refuting signal says so rather than leaving the inference to be made.
+- **Naming the gaps on import.** `kit import` reported counts. It now names
+  every finding that came back with no evidence — "imported: 4" is exactly how a
+  finding disappears.
+
+One defect surfaced from the port itself: `testssl` connected to the vhost
+rather than the address, so DNS decided where the probe landed while the scope
+label described a different host. Every other TLS/HTTP adapter already connected
+to the IP and passed the name as SNI or a `Host:` header; `testssl` now pins the
+socket with `--ip`.
+
+Removed: `src/vapt_verify/runbook/` (~1,800 lines), the `runbook` and
+`evidence import` commands, and `docs/RUNBOOK.md`.
 
 ---
 

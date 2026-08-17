@@ -141,27 +141,6 @@ def test_coverage_still_reports_every_imported_finding(
     assert "not a false-positive judgement" in out
 
 
-def test_runbook_honours_the_selection_and_says_so(
-    ws: EngagementWorkspace, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert main(["select", "--base", _base(ws), "--engagement", "e1",
-                 "--severity", "MEDIUM", "--operator", "regis"]) == 0
-    capsys.readouterr()
-    out_dir = tmp_path / "rb"
-    assert main(["runbook", "--base", _base(ws), "--engagement", "e1",
-                 "--output", str(out_dir)]) == 0
-    out = capsys.readouterr().out
-    assert "Using saved selection: 2 of 5" in out
-    assert "3 deselected finding(s) are excluded" in out
-
-    manifest = json.loads((out_dir / "runbook.json").read_text(encoding="utf-8"))
-    assert len(manifest["entries"]) == 2
-    assert "deselected" in manifest["selection_summary"]
-    # The generated artefacts carry the caveat, not just the terminal output.
-    assert "deselected" in (out_dir / "runbook.sh").read_text(encoding="utf-8")
-    assert "deselected" in (out_dir / "runbook.md").read_text(encoding="utf-8")
-
-
 def test_kit_build_honours_the_selection_and_says_so(
     ws: EngagementWorkspace, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -188,24 +167,24 @@ def test_all_findings_overrides_the_selection(
     assert main(["select", "--base", _base(ws), "--engagement", "e1",
                  "--severity", "HIGH"]) == 0
     capsys.readouterr()
-    out_dir = tmp_path / "rb"
-    assert main(["runbook", "--base", _base(ws), "--engagement", "e1",
-                 "--all-findings", "--output", str(out_dir)]) == 0
+    kit = tmp_path / "kit"
+    assert main(["kit", "build", "--base", _base(ws), "--engagement", "e1",
+                 "--all-findings", "--include-informational", "--output", str(kit)]) == 0
     out = capsys.readouterr().out
     assert "--all-findings was passed" in out
-    manifest = json.loads((out_dir / "runbook.json").read_text(encoding="utf-8"))
-    assert len(manifest["entries"]) == len(ITEMS)
+    manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["finding_count"] == len(ITEMS)
 
 
 def test_no_selection_means_everything_is_covered(
     ws: EngagementWorkspace, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    out_dir = tmp_path / "rb"
-    assert main(["runbook", "--base", _base(ws), "--engagement", "e1",
-                 "--output", str(out_dir)]) == 0
+    kit = tmp_path / "kit"
+    assert main(["kit", "build", "--base", _base(ws), "--engagement", "e1",
+                 "--include-informational", "--output", str(kit)]) == 0
     assert "Using saved selection" not in capsys.readouterr().out
-    manifest = json.loads((out_dir / "runbook.json").read_text(encoding="utf-8"))
-    assert len(manifest["entries"]) == len(ITEMS)
+    manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["finding_count"] == len(ITEMS)
     assert manifest["selection_summary"] == ""
 
 
@@ -279,11 +258,11 @@ def test_clear_restores_full_coverage(
     assert "Selection cleared" in capsys.readouterr().out
     assert Selection.load(ws.root) is None
 
-    out_dir = tmp_path / "rb"
-    assert main(["runbook", "--base", base, "--engagement", "e1",
-                 "--output", str(out_dir)]) == 0
-    manifest = json.loads((out_dir / "runbook.json").read_text(encoding="utf-8"))
-    assert len(manifest["entries"]) == len(ITEMS)
+    kit = tmp_path / "kit"
+    assert main(["kit", "build", "--base", base, "--engagement", "e1",
+                 "--include-informational", "--output", str(kit)]) == 0
+    manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["finding_count"] == len(ITEMS)
 
 
 def test_selection_round_trips_through_disk(ws: EngagementWorkspace) -> None:

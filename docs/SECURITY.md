@@ -68,31 +68,44 @@ SHA-256 against the recorded digest, reporting `verified` / `modified` /
 loss, so a broken chain of custody cannot pass silently. Run it before report
 handover and after any restore.
 
-## Generated runbooks (v2.3)
+## Generated validation kits (v2.6)
 
-`vapt-verify runbook` writes shell and PowerShell scripts that an operator runs
-by hand. Generated scripts are a supply chain of their own, so:
+`vapt-verify kit build` writes Bash scripts that an operator runs by hand on
+Kali. Generated scripts are a supply chain of their own, so:
 
 - **Targets are validated before rendering.** A host field that is not a valid
   IP address or hostname produces **no command**; it becomes a manual task with
   the reason attached. This is the same rule `ScopeEnforcer` applies before
   execution (`security/scope.py: is_valid_target`).
-- **Every argument is literal-quoted** (`sh_quote` / `ps_quote`) and round-trip
-  tested against the real shell parser. A scanner-supplied string is data inside
-  a quoted argument and cannot become a second command.
-- **Scope labels, never suppresses.** A target outside the engagement's approved
-  scope is emitted **commented out** with the reason. An engagement with no
-  scope configured is stated as unconfirmed on every command and in the header —
-  the tool never claims an authorisation it cannot verify.
+- **Every argument is literal-quoted** (`shlex.quote`) and round-trip tested
+  against the real shell parser. A scanner-supplied string is data inside a
+  quoted argument and cannot become a second command.
+- **Scope labels, never suppresses.** Generation is not execution, and an
+  engagement whose scope has not been filled in yet must still produce a usable
+  kit — so each step carries one of four labels (`in_scope`,
+  `scope_unconfigured`, `out_of_scope`, `unusable_target`) rather than being
+  dropped. A script for an out-of-scope target is still written, still readable,
+  and still carries its reason, but **exits before invoking the tool** unless
+  the operator sets `VAPT_ALLOW_OUT_OF_SCOPE=1` deliberately. The tool never
+  claims an authorisation it cannot verify.
+- **The socket goes where scope was checked.** Scope is validated against the
+  address, so a vhost or SNI name is only ever sent *inside* the connection
+  (`-servername`, `Host:`, `--ip`), never handed to a tool as the thing to
+  connect to. Otherwise DNS, not the engagement, would decide where a probe
+  lands.
 - **No `set -e`, no `shell=True` equivalent.** A non-zero exit from a probe is
   ordinary output, not a failure to abort on and not a verdict.
 - Generated scripts contain only what the declarative recipes describe: no
   password or community-string guessing, no destructive HTTP methods, no
   exploitation.
 
-`vapt-verify evidence import` copies each captured file into the workspace
-unmodified and hashes the stored copy, so an operator-run capture carries the
-same chain of custody as one `run` produced. Re-import is idempotent by digest.
+`vapt-verify kit import` copies each captured file into the workspace
+unmodified and verifies the stored copy against the SHA-256 the capture
+recorded, so an operator-run capture carries the same chain of custody as one
+`run` produced. Re-import is idempotent by capture id, and a digest mismatch is
+rejected rather than imported. The import summary **names** every finding that
+came back with no evidence: a count alone would let an operator read "imported:
+4" as "the round trip is finished".
 A step whose tool was missing on the operator's machine is recorded as a
 **capability gap**, never as evidence that the condition is absent, and no
 import path sets a verdict.

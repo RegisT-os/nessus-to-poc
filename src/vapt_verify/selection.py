@@ -3,7 +3,7 @@
 Generating commands for all 200 findings in a scan is rarely what an operator
 wants at the client site. This module lets them pick -- by severity, host,
 plugin, free text, explicit id, or interactively -- and saves that choice so
-``runbook``, ``kit build`` and ``poc export`` all honour the same set.
+``kit build`` and ``poc export`` both honour the same set.
 
 The load-bearing rule: **a selection is a scoping decision, not a deletion.**
 Deselecting a finding does not remove it from the inventory, does not give it a

@@ -398,6 +398,53 @@ def test_kit_import_never_sets_a_verdict(
     assert not scoped_ws.load_decisions()
 
 
+def test_import_names_the_findings_that_still_have_no_evidence(
+    scoped_ws: EngagementWorkspace, tmp_path: Path
+) -> None:
+    """A count alone is how a finding disappears.
+
+    "imported: 1" reads like the round trip is finished. The operator has to be
+    told, by name, which findings came back bare -- missing evidence is not a
+    false positive.
+    """
+    from vapt_verify.kit import OnsiteEvidenceImporter
+    from vapt_verify.utilities.hashing import sha256_file
+
+    kit = tmp_path / "kit"
+    result = OnsiteKitBuilder(scoped_ws).build(kit)
+    step = next(s for s in result.steps if s.adapter == "openssl" and s.executable)
+
+    output = kit / "evidence" / "c1.txt"
+    output.write_text("CONNECTION ESTABLISHED\n", encoding="utf-8")
+    (kit / "evidence" / "c1.json").write_text(
+        json.dumps({
+            "kit_schema_version": "2",
+            "capture_id": "c1",
+            "step_id": step.step_id,
+            "finding_id": step.finding_id,
+            "asset_id": step.asset_id,
+            "adapter": step.adapter,
+            "target": step.target,
+            "port": step.port,
+            "transport": step.transport,
+            "command_args": step.command_args,
+            "output_file": "evidence/c1.txt",
+            "sha256": sha256_file(output),
+        }),
+        encoding="utf-8",
+    )
+
+    summary = OnsiteEvidenceImporter(scoped_ws).import_kit(kit)
+    assert summary.imported == 1
+    assert step.finding_id not in summary.findings_without_evidence
+    # Everything else the kit asked about is still bare, and says so.
+    stepped = {s.finding_id for s in result.steps}
+    assert set(summary.findings_without_evidence) == stepped - {step.finding_id}
+    assert summary.findings_without_evidence
+    # The local-patch finding can never receive a capture; it is named as work.
+    assert any("Ubuntu Security Update" in e for e in summary.outstanding_manual_steps)
+
+
 # --- the regression that motivated the project -------------------------------
 
 def test_kit_covers_findings_the_legacy_nmap_export_misses(
