@@ -640,6 +640,9 @@ def cmd_kit_build(args: argparse.Namespace) -> int:
             "finding_count": result.finding_count,
             "executable_step_count": result.executable_count,
             "manual_step_count": result.manual_count,
+            "scope_configured": result.scope_configured,
+            "out_of_scope_step_count": result.out_of_scope_count,
+            "unusable_target_step_count": result.unusable_target_count,
             "output": str(result.root),
         }
     )
@@ -647,6 +650,17 @@ def cmd_kit_build(args: argparse.Namespace) -> int:
     print(f"  Nessus findings:     {result.finding_count}")
     print(f"  executable scripts:  {result.executable_count}")
     print(f"  manual evidence:     {result.manual_count}")
+    if result.out_of_scope_count:
+        print(f"  out of scope:        {result.out_of_scope_count} step(s) -- generated and "
+              "labelled, but the scripts refuse to run")
+    if result.unusable_target_count:
+        print(f"  unusable target:     {result.unusable_target_count} step(s) -- the scanner "
+              "address is not a valid IP or hostname; listed as manual work")
+    if not result.scope_configured:
+        print("warning: this engagement declares no approved scope, so no target could be "
+              "checked against one.")
+        print(f"  Set approved_cidrs / approved_targets / approved_hostnames in "
+              f"{ws.engagement_file}, or apply a profile, to have the kit check for you.")
     print("Next: copy the whole kit to Kali, read commands.md, then run ./run-all.sh")
     return 0
 

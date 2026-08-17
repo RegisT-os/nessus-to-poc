@@ -7,7 +7,14 @@ from pathlib import Path
 
 from vapt_verify.cli.main import main
 from vapt_verify.importers.nessus_xml import NessusImporter
-from vapt_verify.kit import OnsiteEvidenceImporter, OnsiteKitBuilder
+from vapt_verify.kit import (
+    SCOPE_IN_SCOPE,
+    SCOPE_OUT_OF_SCOPE,
+    SCOPE_UNCONFIGURED,
+    SCOPE_UNUSABLE_TARGET,
+    OnsiteEvidenceImporter,
+    OnsiteKitBuilder,
+)
 from vapt_verify.models.engagement import Engagement
 from vapt_verify.reconciliation import reconcile
 from vapt_verify.reporting.poc import PocBuilder
@@ -17,10 +24,15 @@ from vapt_verify.workspace import EngagementWorkspace
 SAMPLE = Path(__file__).parent / "fixtures" / "sample_small.nessus"
 
 
-def _workspace(tmp_path: Path) -> EngagementWorkspace:
-    ws = EngagementWorkspace.create(tmp_path / "e1", Engagement(engagement_id="e1"))
-    result = NessusImporter(engagement_id="e1").import_file(SAMPLE)
-    ws.persist_import(source_path=SAMPLE, result=result, reconciliation=reconcile(result))
+def _workspace(
+    tmp_path: Path,
+    engagement: Engagement | None = None,
+    source: Path = SAMPLE,
+) -> EngagementWorkspace:
+    engagement = engagement or Engagement(engagement_id="e1")
+    ws = EngagementWorkspace.create(tmp_path / engagement.engagement_id, engagement)
+    result = NessusImporter(engagement_id=engagement.engagement_id).import_file(source)
+    ws.persist_import(source_path=source, result=result, reconciliation=reconcile(result))
     return ws
 
 
@@ -234,3 +246,158 @@ def test_kit_include_informational_generates_their_scripts(tmp_path: Path) -> No
     manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["retained_informational_count"] == 0
     assert [s for s in manifest["steps"] if s["severity"] == "INFORMATIONAL"]
+
+
+# --- scope labels a step; it never deletes one -------------------------------
+#
+# Ported from the runbook generator, which was the only one enforcing these.
+# The kit is prepared on a machine that never touches a target, so scope cannot
+# gate generation the way it gates execution -- it labels each step, and the
+# generated script refuses to run anything explicitly out of scope.
+
+
+def _scoped(tmp_path: Path, cidr: str, engagement_id: str) -> EngagementWorkspace:
+    return _workspace(
+        tmp_path,
+        Engagement(
+            engagement_id=engagement_id,
+            approved_cidrs=[cidr],
+            authorisation_reference="AUTH-2026-001",
+        ),
+    )
+
+
+def test_in_scope_targets_are_labelled_and_scripts_have_no_guard(tmp_path: Path) -> None:
+    ws = _scoped(tmp_path, "192.0.2.0/24", "eng-scoped")
+    kit = tmp_path / "kit"
+    result = OnsiteKitBuilder(ws).build(kit)
+
+    assert result.scope_configured
+    assert result.out_of_scope_count == 0
+    assert result.unusable_target_count == 0
+    assert all(s.scope_status == SCOPE_IN_SCOPE for s in result.steps)
+    assert all(s.authorised for s in result.steps)
+    for script in (kit / "scripts").glob("*.sh"):
+        body = script.read_text(encoding="utf-8")
+        assert f"VAPT_SCOPE_STATUS={SCOPE_IN_SCOPE}" in body
+        assert "REFUSED (out of scope)" not in body
+
+
+def test_unconfigured_scope_still_produces_a_usable_kit(tmp_path: Path) -> None:
+    """The regression the runbook was built to avoid, now pinned on the kit.
+
+    An engagement whose scope has not been filled in yet must still yield a kit
+    an operator can run -- generating a command is not executing one. What it
+    must not do is imply the tool checked authorisation when it could not.
+    """
+    ws = _workspace(tmp_path)
+    kit = tmp_path / "kit"
+    result = OnsiteKitBuilder(ws).build(kit)
+
+    assert not result.scope_configured
+    assert result.executable_count > 0, "an unscoped engagement must still yield commands"
+    assert all(s.scope_status == SCOPE_UNCONFIGURED for s in result.steps)
+    assert all(s.authorised for s in result.steps)
+    for script in (kit / "scripts").glob("*.sh"):
+        body = script.read_text(encoding="utf-8")
+        assert "cannot confirm this" in body
+        assert "REFUSED (out of scope)" not in body
+    commands = (kit / "commands.md").read_text(encoding="utf-8")
+    assert "declares no approved scope" in commands
+
+
+def test_out_of_scope_target_is_generated_labelled_and_refused_at_run_time(
+    tmp_path: Path,
+) -> None:
+    ws = _scoped(tmp_path, "198.51.100.0/24", "eng-elsewhere")
+    kit = tmp_path / "kit"
+    result = OnsiteKitBuilder(ws).build(kit)
+
+    assert result.scope_configured
+    assert result.out_of_scope_count == len(result.steps) > 0
+    assert all(s.scope_status == SCOPE_OUT_OF_SCOPE for s in result.steps)
+    assert not any(s.authorised for s in result.steps)
+
+    # The command is still visible with its reason -- nothing is hidden from
+    # the reviewer -- but running the script exits before the tool is invoked.
+    scripts = list((kit / "scripts").glob("*.sh"))
+    assert scripts
+    for script in scripts:
+        body = script.read_text(encoding="utf-8")
+        assert f"VAPT_SCOPE_STATUS={SCOPE_OUT_OF_SCOPE}" in body
+        assert "REFUSED (out of scope)" in body
+        assert "VAPT_ALLOW_OUT_OF_SCOPE" in body
+        assert body.index("REFUSED (out of scope)") < body.index("capture_step")
+    commands = (kit / "commands.md").read_text(encoding="utf-8")
+    assert "OUT OF SCOPE" in commands
+    assert "openssl" in commands
+
+
+def test_out_of_scope_script_exits_without_running_the_tool(tmp_path: Path) -> None:
+    """Proof by execution: the guard is real bash, not a comment."""
+    import subprocess
+
+    ws = _scoped(tmp_path, "198.51.100.0/24", "eng-elsewhere")
+    kit = tmp_path / "kit"
+    OnsiteKitBuilder(ws).build(kit)
+    script = next((kit / "scripts").glob("*.sh"))
+
+    proc = subprocess.run(
+        ["bash", str(script)], capture_output=True, text=True, timeout=30, check=False
+    )
+    assert proc.returncode == 0
+    assert "REFUSED (out of scope)" in proc.stdout
+    assert not list((kit / "evidence").glob("*.json")), "no capture may be written"
+
+
+def test_unusable_scanner_address_never_reaches_a_script(tmp_path: Path) -> None:
+    """A scan field that is not an address must not be pasted into a root shell."""
+    source = tmp_path / "mangled.nessus"
+    source.write_text(
+        """<?xml version="1.0" ?>
+<NessusClientData_v2>
+  <Report name="Mangled">
+    <ReportHost name="not a host; rm -rf /">
+      <HostProperties>
+        <tag name="host-ip">not a host; rm -rf /</tag>
+      </HostProperties>
+      <ReportItem port="443" svc_name="https" protocol="tcp" severity="2"
+                  pluginID="51192" pluginName="SSL Certificate Cannot Be Trusted"
+                  pluginFamily="General">
+        <synopsis>The certificate cannot be trusted.</synopsis>
+      </ReportItem>
+    </ReportHost>
+  </Report>
+</NessusClientData_v2>
+""",
+        encoding="utf-8",
+    )
+    ws = _workspace(tmp_path, Engagement(engagement_id="eng-mangled"), source=source)
+    kit = tmp_path / "kit"
+    result = OnsiteKitBuilder(ws).build(kit)
+
+    assert result.steps
+    assert all(s.scope_status == SCOPE_UNUSABLE_TARGET for s in result.steps)
+    assert result.unusable_target_count == len(result.steps)
+    # No command was built, so no script exists to run.
+    assert result.executable_count == 0
+    assert not list((kit / "scripts").glob("*.sh"))
+    assert not any("rm -rf" in arg for s in result.steps for arg in s.command_args)
+    # The operator is told why, rather than the finding quietly vanishing.
+    commands = (kit / "commands.md").read_text(encoding="utf-8")
+    assert "NO COMMAND GENERATED" in commands
+    assert "not a valid IP address or hostname" in commands
+
+
+def test_scope_labels_reach_the_manifest(tmp_path: Path) -> None:
+    ws = _scoped(tmp_path, "198.51.100.0/24", "eng-elsewhere")
+    kit = tmp_path / "kit"
+    OnsiteKitBuilder(ws).build(kit)
+
+    manifest = json.loads((kit / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["scope_configured"] is True
+    assert manifest["out_of_scope_step_count"] == len(manifest["steps"])
+    for step in manifest["steps"]:
+        assert step["scope_status"] == SCOPE_OUT_OF_SCOPE
+        assert step["authorised"] is False
+        assert step["scope_reason"]
