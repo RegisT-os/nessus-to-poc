@@ -48,6 +48,112 @@ from vapt_verify.workspace import EngagementWorkspace
 # absence never removes a finding; it changes a finding's disposition.
 _OPTIONAL_TOOLS = ["nmap", "openssl", "testssl.sh", "sslscan", "ssh-audit", "dig", "curl"]
 
+#: The commands ``--help`` lists, in the order an engagement actually runs.
+#:
+#: Everything else stays fully invocable with its own ``--help``; it is simply
+#: not in the way. Thirty-odd commands on one screen tells an operator nothing
+#: about which five they need today, and the ones they need are always these.
+#: ``vapt-verify commands`` prints the complete list.
+CORE_COMMANDS = (
+    "doctor",
+    "prepare",
+    "import",
+    "select",
+    "kit",
+    "findings",
+    "review",
+    "poc",
+    "coverage",
+    "commands",
+)
+
+#: Every command, grouped for ``vapt-verify commands``. Kept as data so a new
+#: command cannot be added without deciding where an operator would look for it.
+COMMAND_GROUPS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "Core workflow",
+        "What a normal engagement uses, in order.",
+        (
+            ("doctor", "check this machine can build and run kits"),
+            ("prepare", "Nessus file -> engagement -> Kali validation kit, in one step"),
+            ("import", "add another scanner file to an existing engagement"),
+            ("select", "choose which findings become capture scripts"),
+            ("kit build", "generate the Kali Bash validation scripts"),
+            ("kit import", "read the returned kit's captures back in, hashed"),
+            ("findings", "list or show findings"),
+            ("review", "record a disposition and verdict for a finding"),
+            ("poc export", "export report-ready PoC documents"),
+            ("coverage", "did any finding disappear? (accounted / imported)"),
+        ),
+    ),
+    (
+        "Engagement setup",
+        "Needed once per engagement, or when working from a client profile.",
+        (
+            ("init", "initialize an engagements base directory"),
+            ("engagement create", "create an engagement workspace"),
+            ("engagement show", "show an engagement's config"),
+            ("profile show", "show a profile"),
+            ("profile apply", "create an engagement from a profile"),
+            ("environments assign", "assign environments to assets"),
+        ),
+    ),
+    (
+        "Inspecting what was imported",
+        "Reading the inventory without changing anything.",
+        (
+            ("inventory assets", "browse normalized assets"),
+            ("inventory services", "browse normalized service observations"),
+            ("classify", "classify findings and assign dispositions"),
+            ("explain", "explain why a finding selected the recipe it did"),
+            ("capabilities", "list verification tools available on this machine"),
+            ("plan", "build per-finding / per-asset verification plans"),
+        ),
+    ),
+    (
+        "Running checks from this machine",
+        "The in-process executor, for when you are already on the network.",
+        (
+            ("run", "run a verification adapter (dry-run by default)"),
+            ("playbook list", "list installed playbooks"),
+            ("playbook show", "show a playbook's steps and conditions"),
+            ("playbook validate", "validate a playbook file"),
+        ),
+    ),
+    (
+        "Evidence",
+        "Attaching, requesting and proving the integrity of evidence.",
+        (
+            ("evidence request", "show the evidence a finding requires"),
+            ("evidence add", "attach externally-collected evidence"),
+            ("evidence verify", "re-hash stored evidence (chain of custody)"),
+        ),
+    ),
+    (
+        "Reporting and comparison",
+        "Deliverables, and comparing one scan against another.",
+        (
+            ("report", "generate markdown / json / csv reports"),
+            ("retest", "compare two imports (retest)"),
+            ("diff", "diff two import sets"),
+            ("correlate", "link findings across scanners (never merges)"),
+            ("identities", "candidate asset identities across sources"),
+        ),
+    ),
+    (
+        "Maintenance",
+        "Schema, backups and repository safety.",
+        (
+            ("schema", "show / verify workspace schema version"),
+            ("backup", "back up an engagement with an integrity manifest"),
+            ("restore", "restore an engagement backup"),
+            ("security scan", "scan the repository for client-data leaks"),
+            ("legacy export-nmap", "export legacy-style Nmap commands"),
+            ("version", "print version and exit"),
+        ),
+    ),
+)
+
 
 def _workspace_root(base: str, engagement_id: str) -> Path:
     return Path(base) / engagement_id
@@ -58,6 +164,23 @@ def _workspace_root(base: str, engagement_id: str) -> Path:
 # ---------------------------------------------------------------------------
 def cmd_version(_args: argparse.Namespace) -> int:
     print(f"vapt-verify {__version__}")
+    return 0
+
+
+def cmd_commands(_args: argparse.Namespace) -> int:
+    """Print every command, including the ones ``--help`` keeps out of the way."""
+    width = max(
+        len(name) for _title, _blurb, entries in COMMAND_GROUPS for name, _help in entries
+    )
+    print(f"vapt-verify {__version__} - every command\n")
+    for title, blurb, entries in COMMAND_GROUPS:
+        print(title)
+        print(f"  {blurb}")
+        for name, help_text in entries:
+            print(f"    {name.ljust(width)}  {help_text}")
+        print()
+    print("`vapt-verify --help` lists the core workflow only. Every command above")
+    print("works and has its own --help, whether or not it appears there.")
     return 0
 
 
@@ -1649,11 +1772,44 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Convert scanner findings into Kali validation scripts and evidence-backed PoCs."
         ),
+        epilog=(
+            "A normal engagement, in order:\n"
+            "  1. prepare <scan.nessus> --engagement <id>   import + build the kit\n"
+            "  2. select --engagement <id>                  narrow to what you will verify\n"
+            "  3. kit build --engagement <id>               regenerate scripts for that set\n"
+            "     ... copy the kit to Kali, read commands.md, run ./run-all.sh, copy it back\n"
+            "  4. kit import --engagement <id> --kit-dir <dir>   captures back in, hashed\n"
+            "  5. review --engagement <id> --finding <id>   record a disposition (a human, "
+            "not a tool)\n"
+            "  6. poc export --engagement <id>              the deliverable\n"
+            "  7. coverage --engagement <id>                did any finding disappear?\n"
+            "\n"
+            "This screen lists the core workflow. There are more commands - profiles, "
+            "correlation,\nbackup, playbooks, in-process execution - and they all work: "
+            "run `vapt-verify commands`."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument("--traceback", action="store_true",
                         help="show the full stack trace on unexpected errors")
-    sub = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", metavar="<command>")
+
+    def add_command(name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        """Register a top-level command, listing only the core workflow in --help.
+
+        Thirty-odd commands in one help screen tells an operator nothing about
+        which five they need. Hiding one is a presentation decision and nothing
+        more: every command below stays fully invocable, keeps its own
+        ``--help``, and is listed by ``vapt-verify commands``.
+        """
+        if name not in CORE_COMMANDS:
+            # argparse renders a literal "==SUPPRESS==" for a subparser choice
+            # whose help is SUPPRESS; it only omits the row when `help` is
+            # absent, because that is what decides whether a choice
+            # pseudo-action is created at all.
+            kwargs.pop("help", None)
+        return sub.add_parser(name, **kwargs)
 
     def add_base(p: argparse.ArgumentParser) -> None:
         p.add_argument("--base", default="engagements", help="engagements base directory")
@@ -1661,10 +1817,15 @@ def build_parser() -> argparse.ArgumentParser:
     def add_engagement(p: argparse.ArgumentParser) -> None:
         p.add_argument("--engagement", required=True, help="engagement id")
 
-    sub.add_parser("version").set_defaults(func=cmd_version)
-    sub.add_parser("doctor").set_defaults(func=cmd_doctor)
+    add_command("version").set_defaults(func=cmd_version)
+    add_command("doctor", help="check this machine can build and run kits").set_defaults(
+        func=cmd_doctor
+    )
+    add_command(
+        "commands", help="list every command, including the ones --help hides"
+    ).set_defaults(func=cmd_commands)
 
-    p_prepare = sub.add_parser(
+    p_prepare = add_command(
         "prepare", help="turn a Nessus file into a Kali validation kit"
     )
     add_base(p_prepare)
@@ -1683,11 +1844,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_prepare.set_defaults(func=cmd_prepare)
 
-    p_init = sub.add_parser("init", help="initialize an engagements base directory")
+    p_init = add_command("init", help="initialize an engagements base directory")
     add_base(p_init)
     p_init.set_defaults(func=cmd_init)
 
-    p_eng = sub.add_parser("engagement", help="manage engagements")
+    p_eng = add_command("engagement", help="manage engagements")
     eng_sub = p_eng.add_subparsers(dest="engagement_command", required=True)
     p_eng_create = eng_sub.add_parser("create", help="create an engagement workspace")
     add_base(p_eng_create)
@@ -1703,7 +1864,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_eng_show.add_argument("--id", required=True)
     p_eng_show.set_defaults(func=cmd_engagement_show)
 
-    p_import = sub.add_parser("import", help="import a scanner file (or 'import status')")
+    p_import = add_command("import", help="import a scanner file (or 'import status')")
     add_base(p_import)
     add_engagement(p_import)
     p_import.add_argument("target", help="path to a scan file, or the literal 'status'")
@@ -1713,7 +1874,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_import.add_argument("--allow-suppressions", type=int, default=0)
     p_import.set_defaults(func=cmd_import_dispatch)
 
-    p_inv = sub.add_parser("inventory", help="browse normalized inventory")
+    p_inv = add_command("inventory", help="browse normalized inventory")
     inv_sub = p_inv.add_subparsers(dest="inventory_command", required=True)
     p_inv_assets = inv_sub.add_parser("assets")
     add_base(p_inv_assets)
@@ -1724,7 +1885,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_engagement(p_inv_services)
     p_inv_services.set_defaults(func=cmd_inventory_services)
 
-    p_find = sub.add_parser("findings", help="list or show findings")
+    p_find = add_command("findings", help="list or show findings")
     find_sub = p_find.add_subparsers(dest="findings_command", required=True)
     p_find_list = find_sub.add_parser("list")
     add_base(p_find_list)
@@ -1739,34 +1900,34 @@ def build_parser() -> argparse.ArgumentParser:
     p_find_show.add_argument("finding_id")
     p_find_show.set_defaults(func=cmd_findings_show)
 
-    sub.add_parser("capabilities", help="list available verification tools").set_defaults(
+    add_command("capabilities", help="list available verification tools").set_defaults(
         func=cmd_capabilities
     )
 
-    p_classify = sub.add_parser("classify", help="classify findings and assign dispositions")
+    p_classify = add_command("classify", help="classify findings and assign dispositions")
     add_base(p_classify)
     add_engagement(p_classify)
     p_classify.set_defaults(func=cmd_classify)
 
-    p_explain = sub.add_parser("explain", help="explain a finding's classification")
+    p_explain = add_command("explain", help="explain a finding's classification")
     add_base(p_explain)
     add_engagement(p_explain)
     p_explain.add_argument("finding_id")
     p_explain.set_defaults(func=cmd_explain)
 
-    p_cov = sub.add_parser("coverage", help="coverage report (accounted / imported)")
+    p_cov = add_command("coverage", help="coverage report (accounted / imported)")
     add_base(p_cov)
     add_engagement(p_cov)
     p_cov.set_defaults(func=cmd_coverage)
 
-    p_plan = sub.add_parser("plan", help="build verification plans")
+    p_plan = add_command("plan", help="build verification plans")
     add_base(p_plan)
     add_engagement(p_plan)
     p_plan.add_argument("--finding", default="")
     p_plan.add_argument("--asset", default="")
     p_plan.set_defaults(func=cmd_plan)
 
-    p_run = sub.add_parser("run", help="run a verification adapter (dry-run by default)")
+    p_run = add_command("run", help="run a verification adapter (dry-run by default)")
     add_base(p_run)
     add_engagement(p_run)
     p_run.add_argument("--finding", required=True)
@@ -1776,7 +1937,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--timeout", type=float, default=120.0)
     p_run.set_defaults(func=cmd_run)
 
-    p_pb = sub.add_parser(
+    p_pb = add_command(
         "playbook", help="declarative ordered verification pipelines"
     )
     pb_sub = p_pb.add_subparsers(dest="playbook_command", required=True)
@@ -1793,7 +1954,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "installed library")
     p_pb_validate.set_defaults(func=cmd_playbook_validate)
 
-    p_select = sub.add_parser(
+    p_select = add_command(
         "select",
         help="choose which findings become capture scripts (interactive by default)",
     )
@@ -1823,7 +1984,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_select.add_argument("--operator", default="unknown")
     p_select.set_defaults(func=cmd_select)
 
-    p_kit = sub.add_parser("kit", help="build a Kali kit or import its returned evidence")
+    p_kit = add_command("kit", help="build a Kali kit or import its returned evidence")
     kit_sub = p_kit.add_subparsers(dest="kit_command", required=True)
     p_kit_build = kit_sub.add_parser("build", help="generate Kali Bash validation scripts")
     add_base(p_kit_build)
@@ -1851,7 +2012,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_kit_import.add_argument("--operator", default="", help="override captured operator")
     p_kit_import.set_defaults(func=cmd_kit_import)
 
-    p_ev = sub.add_parser("evidence", help="manage evidence")
+    p_ev = add_command("evidence", help="manage evidence")
     ev_sub = p_ev.add_subparsers(dest="evidence_command", required=True)
     p_ev_req = ev_sub.add_parser("request", help="show the evidence a finding requires")
     add_base(p_ev_req)
@@ -1875,7 +2036,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ev_verify.add_argument("--finding", default="", help="limit to one finding")
     p_ev_verify.set_defaults(func=cmd_evidence_verify)
 
-    p_legacy = sub.add_parser("legacy", help="legacy-compatibility commands")
+    p_legacy = add_command("legacy", help="legacy-compatibility commands")
     legacy_sub = p_legacy.add_subparsers(dest="legacy_command", required=True)
     p_legacy_nmap = legacy_sub.add_parser("export-nmap", help="export legacy-style Nmap commands")
     add_base(p_legacy_nmap)
@@ -1883,7 +2044,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_legacy_nmap.add_argument("--output", default="")
     p_legacy_nmap.set_defaults(func=cmd_legacy_export_nmap)
 
-    p_profile = sub.add_parser("profile", help="engagement profiles")
+    p_profile = add_command("profile", help="engagement profiles")
     profile_sub = p_profile.add_subparsers(dest="profile_command", required=True)
     p_profile_show = profile_sub.add_parser("show", help="show a profile")
     p_profile_show.add_argument("path")
@@ -1895,28 +2056,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_profile_apply.add_argument("--force", action="store_true")
     p_profile_apply.set_defaults(func=cmd_profile_apply)
 
-    p_env = sub.add_parser("environments", help="environment mapping")
+    p_env = add_command("environments", help="environment mapping")
     env_sub = p_env.add_subparsers(dest="environments_command", required=True)
     p_env_assign = env_sub.add_parser("assign", help="assign environments to assets")
     add_base(p_env_assign)
     add_engagement(p_env_assign)
     p_env_assign.set_defaults(func=cmd_environments_assign)
 
-    p_retest = sub.add_parser("retest", help="compare two imports (retest)")
+    p_retest = add_command("retest", help="compare two imports (retest)")
     add_base(p_retest)
     add_engagement(p_retest)
     p_retest.add_argument("--baseline", default="")
     p_retest.add_argument("--latest", default="")
     p_retest.set_defaults(func=cmd_retest)
 
-    p_report = sub.add_parser("report", help="generate reports")
+    p_report = add_command("report", help="generate reports")
     add_base(p_report)
     add_engagement(p_report)
     p_report.add_argument("--format", choices=["markdown", "json", "csv", "html", "all"],
                           default="all")
     p_report.set_defaults(func=cmd_report)
 
-    p_review = sub.add_parser("review", help="review a finding and record a decision")
+    p_review = add_command("review", help="review a finding and record a decision")
     add_base(p_review)
     add_engagement(p_review)
     p_review.add_argument("finding")
@@ -1930,7 +2091,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_review.add_argument("--confidence", default="medium")
     p_review.set_defaults(func=cmd_review)
 
-    p_poc = sub.add_parser("poc", help="export report-ready PoC documents")
+    p_poc = add_command("poc", help="export report-ready PoC documents")
     poc_sub = p_poc.add_subparsers(dest="poc_command", required=True)
     p_poc_export = poc_sub.add_parser(
         "export", help="assemble scanner claim + command + capture + verdict per finding"
@@ -1955,19 +2116,19 @@ def build_parser() -> argparse.ArgumentParser:
                               help="also print the first document to stdout")
     p_poc_export.set_defaults(func=cmd_poc_export)
 
-    p_corr = sub.add_parser("correlate", help="link findings across scanners (never merges)")
+    p_corr = add_command("correlate", help="link findings across scanners (never merges)")
     add_base(p_corr)
     add_engagement(p_corr)
     p_corr.add_argument("--show", action="store_true", help="print each group")
     p_corr.add_argument("--limit", type=int, default=20)
     p_corr.set_defaults(func=cmd_correlate)
 
-    p_ident = sub.add_parser("identities", help="candidate asset identities across sources")
+    p_ident = add_command("identities", help="candidate asset identities across sources")
     add_base(p_ident)
     add_engagement(p_ident)
     p_ident.set_defaults(func=cmd_identities)
 
-    p_diff = sub.add_parser("diff", help="diff two import sets")
+    p_diff = add_command("diff", help="diff two import sets")
     add_base(p_diff)
     add_engagement(p_diff)
     p_diff.add_argument("--baseline", default="")
@@ -1975,23 +2136,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("--limit", type=int, default=20)
     p_diff.set_defaults(func=cmd_diff)
 
-    p_schema = sub.add_parser("schema", help="show/verify schema version")
+    p_schema = add_command("schema", help="show/verify schema version")
     add_base(p_schema)
     p_schema.add_argument("--engagement", default="")
     p_schema.set_defaults(func=cmd_schema)
 
-    p_backup = sub.add_parser("backup", help="back up an engagement (with integrity manifest)")
+    p_backup = add_command("backup", help="back up an engagement (with integrity manifest)")
     add_base(p_backup)
     add_engagement(p_backup)
     p_backup.add_argument("--output", default="")
     p_backup.set_defaults(func=cmd_backup)
 
-    p_restore = sub.add_parser("restore", help="restore an engagement backup")
+    p_restore = add_command("restore", help="restore an engagement backup")
     add_base(p_restore)
     p_restore.add_argument("archive")
     p_restore.set_defaults(func=cmd_restore)
 
-    p_sec = sub.add_parser("security", help="repository safety checks")
+    p_sec = add_command("security", help="repository safety checks")
     sec_sub = p_sec.add_subparsers(dest="security_command", required=True)
     p_sec_scan = sec_sub.add_parser("scan", help="scan for client-data leaks")
     p_sec_scan.add_argument("--root", default=".")
