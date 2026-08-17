@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from shell_probe import posix_shell
 from vapt_verify.cli.main import main
 from vapt_verify.importers.nessus_xml import NessusImporter
@@ -189,6 +191,54 @@ def test_prepare_is_the_simple_one_command_entry_point(tmp_path: Path) -> None:
     assert rc == 0
     assert (base / "client1" / "engagement.yaml").exists()
     assert (kit / "run-all.sh").exists()
+
+
+def test_prepare_no_kit_imports_without_generating_a_kit(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The report-only path: findings without a Kali machine in the loop.
+
+    `--no-kit` must still produce a fully imported, readable engagement --
+    the kit is the only thing it skips. If the import were skipped too there
+    would be nothing to report on, and the flag would just be a slower way of
+    creating an empty directory.
+    """
+    base = tmp_path / "engagements"
+    kit = tmp_path / "client-kali-kit"
+    rc = main(
+        ["prepare", str(SAMPLE), "--base", str(base), "--engagement", "client1",
+         "--output", str(kit), "--no-kit"]
+    )
+    assert rc == 0
+
+    # imported and readable ...
+    assert (base / "client1" / "engagement.yaml").exists()
+    assert list((base / "client1" / "normalized").glob("*.jsonl"))
+    # ... but nothing was generated to carry to Kali.
+    assert not kit.exists()
+    assert not (base / "client1" / "kali-kit").exists()
+
+    out = capsys.readouterr().out
+    assert "poc export" in out, "the report-only path must say where to go next"
+
+
+def test_prepare_no_kit_does_not_claim_a_poc_is_a_proof(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Skipping verification must not quietly downgrade what a PoC asserts.
+
+    An operator who never runs a kit still gets PoC documents, and the one
+    thing they must not conclude is that those documents prove anything. The
+    export already labels them; `prepare` has to say so at the point the
+    decision is made, not leave it to be discovered in the deliverable.
+    """
+    base = tmp_path / "engagements"
+    main(
+        ["prepare", str(SAMPLE), "--base", str(base), "--engagement", "client1", "--no-kit"]
+    )
+    out = capsys.readouterr().out.lower()
+    assert "evidence request" in out
+    assert "not a proof" in out
 
 
 def test_kit_script_names_are_readable_not_hashes(tmp_path: Path) -> None:

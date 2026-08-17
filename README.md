@@ -12,6 +12,9 @@ Kali:    run scripts -> captured evidence
 Windows: import evidence -> final PoC documents
 ```
 
+Not verifying anything, and just want the findings written up? Pass `--no-kit`
+and skip Kali entirely -- see [Report only](#report-only-skip-the-kali-kit).
+
 ## 1. Install on Windows
 
 Open PowerShell in this project directory:
@@ -117,6 +120,46 @@ Export the final evidence-backed PoC documents:
   --engagement client-2026 `
   --format all
 ```
+
+## Report only: skip the Kali kit
+
+Sections 2 to 5 assume you will verify the findings yourself from Kali. If you
+will not -- the scanner output is the deliverable, and no independent check is
+planned -- pass `--no-kit` and the workflow stops after the import:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe prepare `
+  "C:\Scans\client-report.nessus" `
+  --engagement client-2026 `
+  --client-alias ClientName `
+  --no-kit
+```
+
+No kit is generated and no Kali machine is involved. Everything that reads from
+the import still works:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe findings list --engagement client-2026
+.\.venv\Scripts\vapt-verify.exe report --engagement client-2026
+.\.venv\Scripts\vapt-verify.exe poc export --engagement client-2026 --format all
+```
+
+`report` writes `report.md`, `report.json`, `verification_matrix.csv` and an
+HTML dashboard. `poc export` writes one document per finding, each carrying the
+scanner's claim, its plugin id, and the source file's SHA-256.
+
+**What you give up.** Nothing was verified, so every exported PoC opens with a
+banner marking it an **evidence request, not a proof**, and every finding stays
+`unreviewed`. That is deliberate: a scanner claim and a reproduced finding are
+not the same thing, and the document says which one it is. If you need proof
+for some findings but not others, collect it by hand and attach it:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe evidence add --engagement client-2026 --finding <id> ...
+```
+
+Changing your mind costs nothing -- the engagement is a normal engagement, so
+`kit build` still generates the scripts later.
 
 ## Rebuild a kit for an existing engagement
 

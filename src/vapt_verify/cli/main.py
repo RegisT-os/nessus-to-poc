@@ -75,7 +75,8 @@ COMMAND_GROUPS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
         "What a normal engagement uses, in order.",
         (
             ("doctor", "check this machine can build and run kits"),
-            ("prepare", "Nessus file -> engagement -> Kali validation kit, in one step"),
+            ("prepare", "Nessus file -> engagement -> Kali validation kit, in one step "
+                        "(--no-kit stops after the import)"),
             ("import", "add another scanner file to an existing engagement"),
             ("select", "choose which findings become capture scripts"),
             ("kit build", "generate the Kali Bash validation scripts"),
@@ -377,7 +378,15 @@ def cmd_import_status(args: argparse.Namespace) -> int:
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
-    """One-command path: Nessus file -> engagement -> Kali validation kit."""
+    """One-command path: Nessus file -> engagement -> Kali validation kit.
+
+    ``--no-kit`` stops after the import. That is the report-only workflow:
+    the scanner's own output is the deliverable, nothing will be verified
+    independently, and no Kali machine is involved. The findings, reports and
+    PoC documents all read from the import, so they work without a kit -- but
+    a PoC exported with no captured evidence is labelled an evidence request
+    rather than a proof, which is a claim about the finding, not a defect.
+    """
     root = _workspace_root(args.base, args.engagement)
     if (root / "engagement.yaml").exists():
         print(f"error: engagement '{args.engagement}' already exists at {root}")
@@ -407,8 +416,23 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     )
     result = cmd_import(import_args)
     if result != 0:
-        print("Kali kit not generated because the Nessus import did not pass reconciliation.")
+        if args.no_kit:
+            print("Import did not pass reconciliation; nothing further was generated.")
+        else:
+            print("Kali kit not generated because the Nessus import did not pass reconciliation.")
         return result
+
+    if args.no_kit:
+        print("\nNo kit generated (--no-kit). The engagement is imported and ready to read.")
+        print("\nNext:")
+        print(f"  vapt-verify findings list --engagement {args.engagement}")
+        print(f"  vapt-verify report --engagement {args.engagement}")
+        print(f"  vapt-verify poc export --engagement {args.engagement}")
+        print("\nNothing has been verified independently, so an exported PoC carries the")
+        print("scanner's claim and is labelled an evidence request, not a proof. To attach")
+        print("evidence you collected by hand, use 'vapt-verify evidence add'; to generate")
+        print("the Kali scripts after all, use 'vapt-verify kit build'.")
+        return 0
 
     kit_args = argparse.Namespace(
         base=args.base,
@@ -1784,6 +1808,12 @@ def build_parser() -> argparse.ArgumentParser:
             "  6. poc export --engagement <id>              the deliverable\n"
             "  7. coverage --engagement <id>                did any finding disappear?\n"
             "\n"
+            "Report only, when nothing will be independently verified:\n"
+            "  1. prepare <scan.nessus> --engagement <id> --no-kit   import and stop\n"
+            "  2. report --engagement <id>                          or: poc export\n"
+            "     A PoC with no captured evidence is labelled an evidence request,\n"
+            "     not a proof. That is the honest description of a scanner claim.\n"
+            "\n"
             "This screen lists the core workflow. There are more commands - profiles, "
             "correlation,\nbackup, playbooks, in-process execution - and they all work: "
             "run `vapt-verify commands`."
@@ -1826,7 +1856,7 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_commands)
 
     p_prepare = add_command(
-        "prepare", help="turn a Nessus file into a Kali validation kit"
+        "prepare", help="turn a Nessus file into a Kali validation kit (or --no-kit)"
     )
     add_base(p_prepare)
     p_prepare.add_argument("scan_file", help="path to the .nessus file")
@@ -1835,6 +1865,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_prepare.add_argument("--authorisation-reference", default="")
     p_prepare.add_argument(
         "--output", default="", help="kit directory (default: engagement/kali-kit)"
+    )
+    p_prepare.add_argument(
+        "--no-kit", action="store_true",
+        help="stop after the import: no Kali kit, no verification. Use when the "
+             "scanner output is the deliverable and 'report' / 'poc export' are all "
+             "you need.",
     )
     p_prepare.add_argument("--allow-parse-failures", action="store_true")
     p_prepare.add_argument(
