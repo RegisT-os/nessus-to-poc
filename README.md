@@ -131,6 +131,44 @@ If the Nessus file was already imported:
 Use `--force` to refresh generated scripts. Existing files under `evidence/`
 are preserved.
 
+## Tell the tool what you are allowed to touch
+
+Set the engagement's approved scope in `engagements/<id>/engagement.yaml`:
+
+```yaml
+approved_cidrs:
+- 192.0.2.0/24
+approved_targets:
+- 203.0.113.9
+approved_hostnames:
+- web01.client.example
+```
+
+Every generated step is then labelled with one of four states, visible in
+`commands.md`, in `manifest.json`, and in the script itself:
+
+| Label | What it means | What the script does |
+| --- | --- | --- |
+| `in_scope` | the engagement covers this target | runs normally |
+| `scope_unconfigured` | no scope declared; the tool cannot confirm anything | runs, but says it could not check |
+| `out_of_scope` | a scope is declared and this target is outside it | **refuses to run** |
+| `unusable_target` | the scan field is not a valid address | no command is generated at all |
+
+**Scope labels a step; it never deletes one.** Generating a command is not
+running it, so an engagement whose scope has not been filled in yet still
+produces a usable kit. An out-of-scope script is still written and still
+readable — you can see exactly what would have run and why it did not — but it
+exits before invoking the tool. If you hold written authorisation the tool does
+not know about, override it deliberately:
+
+```bash
+VAPT_ALLOW_OUT_OF_SCOPE=1 bash scripts/<script>.sh
+```
+
+A scan field that is not a valid IP or hostname never becomes a script at all.
+It is listed in `commands.md` as manual work with the reason attached, so a
+mangled scanner value is never pasted into a shell you run as root.
+
 ## Pick which findings to convert
 
 A 200-finding scan rarely needs 200 sets of capture scripts. `select` chooses
@@ -212,6 +250,20 @@ readable name, e.g. `./run-all.sh --finding SSL-Self-Signed`.
 - Port-zero/local-check findings usually require package, registry, credentialed,
   or administrator-supplied evidence.
 - Review `commands.md` and confirm written authorisation before running anything.
+
+## Finding the other commands
+
+`vapt-verify --help` lists the ten commands a normal engagement uses, and the
+order to run them in. There are about thirty more — profiles, correlation,
+retest and diff, playbooks, in-process execution, backup and restore, schema
+checks — and they all work; they are simply not in the way.
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe commands
+```
+
+lists every one of them, grouped by what you would be trying to do. Each has its
+own `--help` whether or not it appears on the main screen.
 
 ## Technical reference
 

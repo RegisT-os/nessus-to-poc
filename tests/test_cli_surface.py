@@ -114,3 +114,44 @@ def test_help_epilog_states_the_workflow_order(
     for step in ("prepare", "select", "kit build", "kit import", "review", "poc export"):
         assert step in out
     assert "vapt-verify commands" in out
+
+
+def test_every_flag_the_epilog_shows_actually_exists() -> None:
+    """The epilog is documentation, and documentation drifts.
+
+    It shipped once claiming `kit import --kit-dir <dir>` when the kit
+    directory is a positional -- an operator copying that line straight off the
+    help screen gets an error. Parse what it advertises instead of trusting it.
+    """
+    parser = build_parser()
+    epilog = parser.epilog or ""
+    registered = _registered_commands()
+
+    checked = 0
+    for line in epilog.splitlines():
+        stripped = line.strip()
+        if not stripped or not stripped[0].isdigit():
+            continue
+        # "  3. kit build --engagement <id>   regenerate ..." -> the argv part
+        words = stripped.split(".", 1)[1].split()
+        command = words[0]
+        assert command in registered, f"epilog names an unknown command: {command}"
+        target = registered[command]
+        rest = words[1:]
+        if rest and not rest[0].startswith("-") and not rest[0].startswith("<"):
+            sub_action = next(
+                (a for a in target._actions if isinstance(a, argparse._SubParsersAction)),
+                None,
+            )
+            if sub_action is not None and rest[0] in sub_action.choices:
+                target = sub_action.choices[rest[0]]
+                rest = rest[1:]
+        known = {opt for action in target._actions for opt in action.option_strings}
+        for word in rest:
+            if word.startswith("--"):
+                assert word in known, (
+                    f"epilog shows `{' '.join(words)}` but {word} is not an option of "
+                    f"that command"
+                )
+                checked += 1
+    assert checked, "no epilog flags were checked; the parsing above stopped working"
