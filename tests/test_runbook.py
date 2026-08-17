@@ -18,6 +18,9 @@ What these tests defend:
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -41,6 +44,53 @@ from vapt_verify.runbook.render import (
     to_shell,
 )
 from vapt_verify.workspace import EngagementWorkspace
+
+# --- shell resolution --------------------------------------------------------
+
+
+def posix_shell(name: str) -> str:
+    """Absolute path to a working POSIX shell, or skip the test.
+
+    Passing a bare ``"bash"`` to ``subprocess`` is not portable to Windows:
+    ``CreateProcess`` searches System32 *before* PATH, so the name resolves to
+    the WSL launcher (``C:\\Windows\\System32\\bash.exe``) even when Git Bash
+    is first on PATH -- ``shutil.which`` and the child process disagree. On a
+    machine with no WSL distro installed that launcher fails with an
+    ``execvpe`` error, which reads as a shell *syntax* failure here and hides
+    whether the generated script is actually valid.
+
+    So resolve an explicit interpreter, reject the two Windows shims, and
+    prove the candidate runs before handing it to a test.
+    """
+    candidates: list[str] = []
+    if os.name == "nt":
+        for var, default in (
+            ("ProgramFiles", r"C:\Program Files"),
+            ("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+        ):
+            git = Path(os.environ.get(var, default)) / "Git"
+            candidates += [
+                str(git / "bin" / f"{name}.exe"),
+                str(git / "usr" / "bin" / f"{name}.exe"),
+            ]
+
+    found = shutil.which(name)
+    # System32 is the WSL launcher; WindowsApps is the Store app-execution alias.
+    if found and not any(shim in found.lower() for shim in ("system32", "windowsapps")):
+        candidates.append(found)
+
+    for candidate in candidates:
+        if not Path(candidate).exists():
+            continue
+        try:
+            probe = subprocess.run([candidate, "-c", "exit 0"], capture_output=True, timeout=30)
+        except OSError:
+            continue
+        if probe.returncode == 0:
+            return candidate
+
+    pytest.skip(f"no working POSIX {name!r} on this machine")
+
 
 # --- fixtures ---------------------------------------------------------------
 
@@ -407,15 +457,14 @@ def test_hostile_target_never_becomes_a_command(tmp_path: Path, hostile: str) ->
 
 
 def test_sh_quote_neutralises_shell_metacharacters() -> None:
+    shell = posix_shell("sh")
     for value in ["a; rm -rf /", "$(id)", "`id`", "a'b", "a b", "a\nb", "*"]:
         quoted = sh_quote(value)
         assert quoted.startswith("'") and quoted.endswith("'")
         # Round-trip through the shell's own parser: the argument must survive
         # intact, which is only true if nothing was expanded or split.
-        import subprocess
-
         out = subprocess.run(
-            ["/bin/sh", "-c", f"printf %s {quoted}"], capture_output=True, text=True, check=True
+            [shell, "-c", f"printf %s {quoted}"], capture_output=True, text=True, check=True
         )
         assert out.stdout == value
 
@@ -430,9 +479,10 @@ def test_ps_quote_doubles_single_quotes() -> None:
 def test_shell_script_is_valid_bash(scoped_ws: EngagementWorkspace, tmp_path: Path) -> None:
     script = tmp_path / "runbook.sh"
     script.write_text(to_shell(_build(scoped_ws)), encoding="utf-8")
-    import subprocess
 
-    result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+    result = subprocess.run(
+        [posix_shell("bash"), "-n", str(script)], capture_output=True, text=True
+    )
     assert result.returncode == 0, result.stderr
 
 
