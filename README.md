@@ -12,6 +12,9 @@ Kali:    run scripts -> captured evidence
 Windows: import evidence -> final PoC documents
 ```
 
+Not verifying anything, and just want the findings written up? Pass `--no-kit`
+and skip Kali entirely -- see [Report only](#report-only-skip-the-kali-kit).
+
 ## 1. Install on Windows
 
 Open PowerShell in this project directory:
@@ -46,6 +49,30 @@ client-2026-kali-kit/
 |-- lib/capture.sh     Evidence-capture helper
 `-- evidence/          Captured output is written here
 ```
+
+### More than one scan file
+
+A client assessment usually arrives as a folder of per-system exports. Pass the
+folder, or several files, and they all import into the one engagement:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe prepare `
+  "C:\Scans\client-2026" `
+  --engagement client-2026 `
+  --client-alias ClientName
+```
+
+Every `.nessus` file in the directory is imported, sorted by name; anything else
+in the folder is ignored. `import` accepts a directory too, for scans that turn
+up later:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe import "C:\Scans\late-arrivals" --engagement client-2026
+```
+
+Paths are checked before anything is created, so a mistyped path costs you a
+retype rather than a half-built engagement -- and every bad path is reported at
+once, not one per run.
 
 Each Nessus finding remains visible. The tool generates Nmap NSE commands where
 Nmap is appropriate and uses better tools where necessary, including OpenSSL,
@@ -117,6 +144,49 @@ Export the final evidence-backed PoC documents:
   --engagement client-2026 `
   --format all
 ```
+
+## Report only: skip the Kali kit
+
+Sections 2 to 5 assume you will verify the findings yourself from Kali. If you
+will not -- the scanner output is the deliverable, and no independent check is
+planned -- pass `--no-kit` and the workflow stops after the import:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe prepare `
+  "C:\Scans\client-2026" `
+  --engagement client-2026 `
+  --client-alias ClientName `
+  --no-kit
+```
+
+A single `.nessus` file works the same way -- see
+[More than one scan file](#more-than-one-scan-file).
+
+No kit is generated and no Kali machine is involved. Everything that reads from
+the import still works:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe findings list --engagement client-2026
+.\.venv\Scripts\vapt-verify.exe report --engagement client-2026
+.\.venv\Scripts\vapt-verify.exe poc export --engagement client-2026 --format all
+```
+
+`report` writes `report.md`, `report.json`, `verification_matrix.csv` and an
+HTML dashboard. `poc export` writes one document per finding, each carrying the
+scanner's claim, its plugin id, and the source file's SHA-256.
+
+**What you give up.** Nothing was verified, so every exported PoC opens with a
+banner marking it an **evidence request, not a proof**, and every finding stays
+`unreviewed`. That is deliberate: a scanner claim and a reproduced finding are
+not the same thing, and the document says which one it is. If you need proof
+for some findings but not others, collect it by hand and attach it:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe evidence add --engagement client-2026 --finding <id> ...
+```
+
+Changing your mind costs nothing -- the engagement is a normal engagement, so
+`kit build` still generates the scripts later.
 
 ## Rebuild a kit for an existing engagement
 
