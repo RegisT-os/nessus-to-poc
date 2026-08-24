@@ -50,6 +50,30 @@ client-2026-kali-kit/
 `-- evidence/          Captured output is written here
 ```
 
+### More than one scan file
+
+A client assessment usually arrives as a folder of per-system exports. Pass the
+folder, or several files, and they all import into the one engagement:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe prepare `
+  "C:\Scans\client-2026" `
+  --engagement client-2026 `
+  --client-alias ClientName
+```
+
+Every `.nessus` file in the directory is imported, sorted by name; anything else
+in the folder is ignored. `import` accepts a directory too, for scans that turn
+up later:
+
+```powershell
+.\.venv\Scripts\vapt-verify.exe import "C:\Scans\late-arrivals" --engagement client-2026
+```
+
+Paths are checked before anything is created, so a mistyped path costs you a
+retype rather than a half-built engagement -- and every bad path is reported at
+once, not one per run.
+
 Each Nessus finding remains visible. The tool generates Nmap NSE commands where
 Nmap is appropriate and uses better tools where necessary, including OpenSSL,
 testssl.sh, sslscan, ssh-audit, curl, snmpget, dig, smbclient and ldapsearch.
@@ -129,11 +153,14 @@ planned -- pass `--no-kit` and the workflow stops after the import:
 
 ```powershell
 .\.venv\Scripts\vapt-verify.exe prepare `
-  "C:\Scans\client-report.nessus" `
+  "C:\Scans\client-2026" `
   --engagement client-2026 `
   --client-alias ClientName `
   --no-kit
 ```
+
+A single `.nessus` file works the same way -- see
+[More than one scan file](#more-than-one-scan-file).
 
 No kit is generated and no Kali machine is involved. Everything that reads from
 the import still works:

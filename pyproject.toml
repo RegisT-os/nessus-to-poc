@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vapt-verify"
-version = "2.6.0"
+version = "2.7.0"
 description = "VAPT Verification Orchestrator — local-first, multi-engagement vulnerability verification and evidence orchestration platform."
 readme = "README.md"
 requires-python = ">=3.12"

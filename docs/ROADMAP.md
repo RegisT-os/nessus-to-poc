@@ -245,6 +245,40 @@ socket with `--ip`.
 Removed: `src/vapt_verify/runbook/` (~1,800 lines), the `runbook` and
 `evidence import` commands, and `docs/RUNBOOK.md`.
 
+## v2.7 — Getting Findings In ✅
+
+*Theme: the first command an operator runs should not be the one that punishes
+them for a typo.*
+
+Three things about the front door, all found by watching a real engagement fail
+rather than by reading the code:
+
+- **`prepare` was not atomic.** It created the engagement, then validated the
+  scan file. Pointing it at a directory therefore left a half-built engagement
+  behind, and the retry — with a corrected path — was refused with "already
+  exists". The advice that error gave was to run `kit build`, which had nothing
+  to build from, because nothing had been imported. One typo cost an engagement
+  id. Inputs are now resolved and sniffed before anything is created, and every
+  bad path is reported at once rather than one per run.
+- **One file at a time.** A client assessment arrives as a folder of per-system
+  exports — eight, in the case that prompted this. `prepare` took a single
+  positional, so covering them meant writing a shell loop, which is how one
+  quietly gets missed. `prepare` and `import` now both accept any number of
+  files and directories of them, all landing in the one engagement, sorted by
+  name so two runs import in the same order. Naming a file and the folder that
+  holds it imports it once, because a double import inflates the counts that
+  `coverage` exists to reconcile.
+- **The kit was mandatory.** `prepare` always ended in a kit build, so an
+  operator who was never going to verify anything still generated Bash scripts
+  for a Kali machine they would not use. `--no-kit` stops after the import.
+  Everything downstream already worked without evidence, so this exposed a path
+  rather than adding one — but it does not pretend the result is something it
+  is not: a PoC with no captured evidence is labelled an evidence request, and
+  `prepare` now says so at the point the decision is made instead of leaving it
+  to be discovered in the deliverable.
+
+---
+
 ---
 
 # Planned

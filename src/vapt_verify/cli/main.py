@@ -75,8 +75,8 @@ COMMAND_GROUPS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
         "What a normal engagement uses, in order.",
         (
             ("doctor", "check this machine can build and run kits"),
-            ("prepare", "Nessus file -> engagement -> Kali validation kit, in one step "
-                        "(--no-kit stops after the import)"),
+            ("prepare", "Nessus file(s) -> engagement -> Kali validation kit, in one "
+                        "step (--no-kit stops after the import)"),
             ("import", "add another scanner file to an existing engagement"),
             ("select", "choose which findings become capture scripts"),
             ("kit build", "generate the Kali Bash validation scripts"),
@@ -282,11 +282,35 @@ def _select_importer(fmt: str, source: Path, engagement_id: str) -> Any:
 
 
 def cmd_import_dispatch(args: argparse.Namespace) -> int:
-    """Route ``import status`` vs ``import <file>`` from a single positional."""
+    """Route ``import status`` vs ``import <file|dir>`` from one positional.
+
+    A directory imports every ``*.nessus`` inside it, matching what `prepare`
+    accepts: the command used to add a scan to an existing engagement should
+    not be fussier about its input than the one that created the engagement.
+    """
     if args.target == "status":
         return cmd_import_status(args)
-    args.scan_file = args.target
-    return cmd_import(args)
+
+    scan_files, errors = _resolve_scan_inputs([args.target])
+    errors += _validate_scan_files(scan_files)
+    if errors:
+        for message in errors:
+            print(f"error: {message}")
+        return 2
+    if not scan_files:
+        print("error: no scan files to import.")
+        return 2
+
+    for index, scan in enumerate(scan_files, start=1):
+        if len(scan_files) > 1:
+            print(f"[{index}/{len(scan_files)}] {scan.name}")
+        args.scan_file = str(scan)
+        result = cmd_import(args)
+        if result != 0:
+            return result
+        if len(scan_files) > 1 and index < len(scan_files):
+            print()
+    return 0
 
 
 def cmd_import(args: argparse.Namespace) -> int:
@@ -377,8 +401,76 @@ def cmd_import_status(args: argparse.Namespace) -> int:
     return 0
 
 
+#: Suffix a Nessus export carries. Matched case-insensitively because Windows
+#: preserves the case the exporter chose and Linux does not fold it for us.
+NESSUS_SUFFIX = ".nessus"
+
+
+def _resolve_scan_inputs(raw: list[str]) -> tuple[list[Path], list[str]]:
+    """Expand user-supplied paths into an ordered list of scan files.
+
+    Accepts files and directories, because a client's scans arrive as a folder
+    of exports and making the operator write a shell loop over them is how one
+    quietly gets missed. A directory contributes its ``*.nessus`` files, sorted
+    by name so two runs over the same folder import in the same order.
+
+    Returns ``(files, errors)``. Every problem is collected rather than raising
+    on the first, so an operator who mistyped two of eight paths learns about
+    both now instead of on the next run.
+    """
+    files: list[Path] = []
+    errors: list[str] = []
+    seen: set[Path] = set()
+
+    for entry in raw:
+        path = normalize_user_path(entry)
+        if not path.exists():
+            errors.append(f"not found: {path}")
+            continue
+        if path.is_dir():
+            found = sorted(
+                child for child in path.iterdir()
+                if child.is_file() and child.suffix.lower() == NESSUS_SUFFIX
+            )
+            if not found:
+                errors.append(f"no {NESSUS_SUFFIX} files in directory: {path}")
+            candidates = found
+        else:
+            candidates = [path]
+
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen:  # the same file named twice, or via its folder
+                continue
+            seen.add(resolved)
+            files.append(candidate)
+
+    return files, errors
+
+
+def _validate_scan_files(files: list[Path]) -> list[str]:
+    """Sniff every file up front, returning one message per unusable file.
+
+    This runs *before* anything is created. `prepare` used to create the
+    engagement first and validate second, so pointing it at a directory left a
+    half-built engagement behind that then blocked the retry with "already
+    exists" -- the failure of the first run became the obstacle to the second.
+    """
+    errors: list[str] = []
+    for path in files:
+        try:
+            inspect_source_file(path)
+        except SourceFileError as exc:
+            errors.append(str(exc))
+    return errors
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
-    """One-command path: Nessus file -> engagement -> Kali validation kit.
+    """One-command path: Nessus file(s) -> engagement -> Kali validation kit.
+
+    Takes any number of scan files, and directories of them, all imported into
+    the one engagement -- a client assessment usually arrives as a folder of
+    per-system exports that belong in a single coverage view.
 
     ``--no-kit`` stops after the import. That is the report-only workflow:
     the scanner's own output is the deliverable, nothing will be verified
@@ -387,11 +479,33 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     a PoC exported with no captured evidence is labelled an evidence request
     rather than a proof, which is a claim about the finding, not a defect.
     """
+    # Resolve and sniff every input before creating anything. A bad path must
+    # cost the operator a retype, not a half-built engagement.
+    scan_files, errors = _resolve_scan_inputs(args.scan_files)
+    errors += _validate_scan_files(scan_files)
+    if errors:
+        for message in errors:
+            print(f"error: {message}")
+        print("Nothing was created.")
+        return 2
+    if not scan_files:
+        print("error: no scan files to import.")
+        print("Nothing was created.")
+        return 2
+
     root = _workspace_root(args.base, args.engagement)
     if (root / "engagement.yaml").exists():
         print(f"error: engagement '{args.engagement}' already exists at {root}")
-        print("Use a new engagement id, or use 'kit build' for the existing engagement.")
+        print("Use a new engagement id, or add these scans to the existing one:")
+        for scan in scan_files:
+            print(f"  vapt-verify import --engagement {args.engagement} \"{scan}\"")
         return 2
+
+    if len(scan_files) > 1:
+        print(f"Importing {len(scan_files)} scan file(s) into '{args.engagement}':")
+        for scan in scan_files:
+            print(f"  {scan.name}")
+        print()
 
     create_args = argparse.Namespace(
         base=args.base,
@@ -406,21 +520,37 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     if result != 0:
         return result
 
-    import_args = argparse.Namespace(
-        base=args.base,
-        engagement=args.engagement,
-        scan_file=args.scan_file,
-        format="nessus",
-        allow_parse_failures=args.allow_parse_failures,
-        allow_suppressions=0,
-    )
-    result = cmd_import(import_args)
-    if result != 0:
-        if args.no_kit:
-            print("Import did not pass reconciliation; nothing further was generated.")
-        else:
-            print("Kali kit not generated because the Nessus import did not pass reconciliation.")
-        return result
+    for index, scan in enumerate(scan_files, start=1):
+        if len(scan_files) > 1:
+            print(f"[{index}/{len(scan_files)}] {scan.name}")
+        import_args = argparse.Namespace(
+            base=args.base,
+            engagement=args.engagement,
+            scan_file=str(scan),
+            format="nessus",
+            allow_parse_failures=args.allow_parse_failures,
+            allow_suppressions=0,
+        )
+        result = cmd_import(import_args)
+        if result != 0:
+            # Preflight passed, so this is a real import failure (malformed
+            # content, or findings that do not reconcile) rather than a typo.
+            # The engagement and any earlier imports are left alone: deleting
+            # an operator's imported data to tidy up a failure is worse than
+            # the failure. Say exactly what is missing instead.
+            if index > 1:
+                print()
+                print(f"{index - 1} of {len(scan_files)} file(s) imported before this failure.")
+            remaining = scan_files[index - 1:]
+            if remaining:
+                print("Fix the problem, then import what is left:")
+                for scan_left in remaining:
+                    print(f"  vapt-verify import --engagement {args.engagement} \"{scan_left}\"")
+            if not args.no_kit:
+                print("No kit was generated.")
+            return result
+        if len(scan_files) > 1 and index < len(scan_files):
+            print()
 
     if args.no_kit:
         print("\nNo kit generated (--no-kit). The engagement is imported and ready to read.")
@@ -1798,7 +1928,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "A normal engagement, in order:\n"
-            "  1. prepare <scan.nessus> --engagement <id>   import + build the kit\n"
+            "  1. prepare <scan|dir> --engagement <id>      import + build the kit\n"
             "  2. select --engagement <id>                  narrow to what you will verify\n"
             "  3. kit build --engagement <id>               regenerate scripts for that set\n"
             "     ... copy the kit to Kali, read commands.md, run ./run-all.sh, copy it back\n"
@@ -1809,7 +1939,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  7. coverage --engagement <id>                did any finding disappear?\n"
             "\n"
             "Report only, when nothing will be independently verified:\n"
-            "  1. prepare <scan.nessus> --engagement <id> --no-kit   import and stop\n"
+            "  1. prepare <scan|dir> --engagement <id> --no-kit   import and stop\n"
             "  2. report --engagement <id>                          or: poc export\n"
             "     A PoC with no captured evidence is labelled an evidence request,\n"
             "     not a proof. That is the honest description of a scanner claim.\n"
@@ -1856,10 +1986,14 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_commands)
 
     p_prepare = add_command(
-        "prepare", help="turn a Nessus file into a Kali validation kit (or --no-kit)"
+        "prepare", help="turn Nessus file(s) into a Kali validation kit (or --no-kit)"
     )
     add_base(p_prepare)
-    p_prepare.add_argument("scan_file", help="path to the .nessus file")
+    p_prepare.add_argument(
+        "scan_files", nargs="+", metavar="scan",
+        help="one or more .nessus files, or a directory containing them "
+             "(all imported into the one engagement)",
+    )
     p_prepare.add_argument("--engagement", required=True, help="new engagement id")
     p_prepare.add_argument("--client-alias", default="")
     p_prepare.add_argument("--authorisation-reference", default="")
@@ -1900,10 +2034,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_eng_show.add_argument("--id", required=True)
     p_eng_show.set_defaults(func=cmd_engagement_show)
 
-    p_import = add_command("import", help="import a scanner file (or 'import status')")
+    p_import = add_command("import", help="import a scanner file or directory (or 'import status')")
     add_base(p_import)
     add_engagement(p_import)
-    p_import.add_argument("target", help="path to a scan file, or the literal 'status'")
+    p_import.add_argument(
+        "target",
+        help="path to a scan file, a directory of .nessus files, or 'status'",
+    )
     p_import.add_argument("--format", default="auto",
                           choices=["auto", "nessus", "nessus-csv", "nmap-xml", "normalized-json"])
     p_import.add_argument("--allow-parse-failures", action="store_true")
